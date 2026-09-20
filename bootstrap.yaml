@@ -194,7 +194,7 @@ Resources:
     Properties:
       RoleName: !Sub '${ProjectName}-${Environment}-gha-deploy'
       Description: Assumed by GitHub Actions to deploy the CloudFormation root stack.
-      MaxSessionDuration: 3600
+      MaxSessionDuration: 7200
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
