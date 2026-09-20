@@ -35,6 +35,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # bootstrap.yaml lives only on the `bootstrap` branch. A workflow_dispatch
+      # defaults to the default branch, where the template is absent, so fail
+      # here with the reason rather than deeper in the AWS CLI.
+      - name: Check the template is on this ref
+        run: |
+          if [ ! -f bootstrap.yaml ]; then
+            echo "::error::bootstrap.yaml is not on ${{ github.ref_name }}. Re-run with ref 'bootstrap'."
+            exit 1
+          fi
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:

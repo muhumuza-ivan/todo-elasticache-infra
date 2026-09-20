@@ -24,8 +24,18 @@ jobs:
 
       # Reads .cfnlintrc.yaml, which suppresses W3002 - main.yaml uses local
       # TemplateURL paths on purpose, for `aws cloudformation package`.
+      # bootstrap.yaml exists only on the `bootstrap` branch, and this workflow
+      # runs for pull requests into both, so lint it only where it is present.
       - name: Lint CloudFormation templates
-        run: cfn-lint main.yaml bootstrap.yaml templates/*.yaml
+        shell: bash
+        run: |
+          set -euo pipefail
+          files="main.yaml templates/*.yaml"
+          if [ -f bootstrap.yaml ]; then
+            files="bootstrap.yaml $files"
+          fi
+          # shellcheck disable=SC2086
+          cfn-lint $files
 
       # cfn-lint checks each file in isolation, so it cannot see that main.yaml
       # passes a parameter a child does not declare. This does.

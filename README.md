@@ -32,7 +32,6 @@ the run log shows exactly what will happen before it happens, and
 
 ```
 main.yaml            deployed from `main`: nests everything in templates/
-bootstrap.yaml       deployed from `bootstrap`: the deployment machinery
 templates/
 ├── ecr.yaml         ECR repository, lifecycle policy, SSM parameters
 ├── github-oidc.yaml GitHub OIDC trust + the ECR push role for the app workflow
@@ -44,6 +43,9 @@ templates/
 └── pipeline.yaml    CodeDeploy, CodePipeline, EventBridge ECR trigger, artifact bucket
 ```
 
+`bootstrap.yaml` is deliberately absent from this listing. It exists only on the
+`bootstrap` branch, which is the branch its workflow deploys from.
+
 ### Two branches, two workflows
 
 | Branch | Template | Workflow | Deploys |
@@ -51,10 +53,11 @@ templates/
 | `main` | `main.yaml` | `deploy.yml` | the environment: eight nested stacks |
 | `bootstrap` | `bootstrap.yaml` | `bootstrap.yml` | the deployment machinery |
 
-`bootstrap.yaml` creates what the deploy workflow needs before it can run at
-all: the S3 bucket `package` uploads to, the OIDC role the workflow assumes,
-the role CloudFormation assumes to build resources, and the CodeConnections
-connection CodePipeline reads the application repository through.
+`bootstrap.yaml` creates the two roles the deploy workflow needs before it can
+run at all: the OIDC role the workflow assumes, and the role CloudFormation
+assumes to build resources. The S3 bucket `package` uploads to and the
+CodeConnections connection used to live here too; both moved into `main.yaml`
+and the templates stack.
 
 It sits on its own branch for three reasons. These are the only resources that
 can grant access to the account; they change almost never; and a change to them
@@ -123,6 +126,11 @@ branch in step with `main` for the workflow files themselves — GitHub runs a
 workflow from the branch that was pushed, so `.github/workflows/bootstrap.yml`
 has to exist on `bootstrap`.
 
+`bootstrap.yaml` itself exists on `bootstrap` and nowhere else. `main` used to
+carry a second copy, the two drifted, and the stale one was the one that
+deployed: a push to `bootstrap` tried to re-create four resources that had
+already moved into `main.yaml`, which early validation refused.
+
 ### Values to confirm before the first deploy
 
 All of these are parameters of `main.yaml`, with defaults:
@@ -149,7 +157,7 @@ pipeline. Each stack publishes what it owns to SSM Parameter Store, and
 | `/todo-app/dev/redis/host` | `cache.yaml` | `REDIS_HOST` |
 | `/todo-app/dev/redis/port` | `cache.yaml` | `REDIS_PORT` |
 | `/todo-app/dev/redis/ssl` | `cache.yaml` | `REDIS_SSL` |
-| `/todo-app/dev/codeconnections/arn` | `bootstrap.yaml` | root stack → pipeline |
+| `/todo-app/dev/codeconnections/arn` | `main.yaml` | root stack → pipeline |
 
 Stack-to-stack wiring inside the root stack does not go through SSM: the ECR
 URI and repository name are handed to the app and pipeline stacks directly with
