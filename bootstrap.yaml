@@ -1,21 +1,21 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
-  Bootstrap stack: the things the deployment workflow needs before it can run.
+  Credentials only: the two IAM roles the deploy workflow needs before it can
+  authenticate. Nothing else belongs here.
 
-  Created ONCE from the console - the workflow that maintains it authenticates
-  with a role this very stack creates, so the first one cannot be automated.
-  After that it is deployed by .github/workflows/bootstrap.yml from the
-  `bootstrap` branch, kept separate from `main` so a change to the deployment
-  machinery is never mixed into an application deploy.
+  Created ONCE from the console, because the workflow that maintains it
+  authenticates with a role this very stack creates - a workflow cannot issue
+  its own credentials. After that it is deployed by
+  .github/workflows/bootstrap.yml from the `bootstrap` branch.
 
-  It holds the S3 bucket that `aws cloudformation package` uploads the nested
-  templates to, the OIDC role the workflow assumes, the role CloudFormation
-  itself assumes to build resources, and the CodeConnections connection that
-  CodePipeline reads the application repository through.
-
-  Everything else - ECR, app OIDC, network, security, data, cache, app,
-  pipeline - is a nested stack of main.yaml, deployed by
-  .github/workflows/deploy.yml.
+  Everything else the project needs is created by main.yaml: ECR, the app OIDC
+  role, the CodeConnections connection, network, security, data, cache, app and
+  pipeline. The one exception is the S3 bucket that `aws cloudformation
+  package` uploads main.yaml's child templates into - it has to exist before
+  packaging runs, so the deploy workflow creates it from
+  templates/template-bucket.yaml as its first step. That bucket holds only
+  packaged templates; CodePipeline keeps appspec.yaml and taskdef.json in a
+  separate artifact bucket declared in pipeline.yaml.
 
 Parameters:
   ProjectName:
@@ -87,103 +87,6 @@ Parameters:
     AllowedPattern: ^[A-Za-z0-9+=,.@_-]{1,48}$
 
 Resources:
-  # ------------------------------------------------------- Source connection
-  # Created in PENDING state. A human must complete the GitHub OAuth handshake
-  # once in Developer Tools -> Settings -> Connections; there is no API, CLI or
-  # CloudFormation path for that authorisation, by design. The pipeline source
-  # action cannot read the application repository until it is AVAILABLE.
-  SourceConnection:
-    Type: AWS::CodeStarConnections::Connection
-    Properties:
-      ConnectionName: !Sub '${ProjectName}-${Environment}-github'
-      ProviderType: GitHub
-      Tags:
-        - Key: Name
-          Value: !Sub '${ProjectName}-${Environment}-github'
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Component
-          Value: cicd
-        - Key: ManagedBy
-          Value: cloudformation
-
-  # Published so the root stack can resolve it as an SSM-backed parameter and
-  # hand the ARN down to the pipeline stack, keeping account-specific literals
-  # out of every template.
-  ConnectionArnParameter:
-    Type: AWS::SSM::Parameter
-    Properties:
-      Name: !Sub '/${ProjectName}/${Environment}/codeconnections/arn'
-      Type: String
-      Value: !Ref SourceConnection
-      Description: CodeConnections connection used by the pipeline source action.
-      Tags:
-        Project: !Ref ProjectName
-        Environment: !Ref Environment
-
-  # --------------------------------------------------------- Template bucket
-  # aws cloudformation package writes each nested template here and rewrites
-  # the root template TemplateURL values to point at the uploaded copies.
-  # Objects are named by content hash, so redeploying unchanged templates
-  # uploads nothing new.
-  TemplateBucket:
-    Type: AWS::S3::Bucket
-    DeletionPolicy: Delete
-    UpdateReplacePolicy: Retain
-    Properties:
-      BucketName: !Sub '${ProjectName}-${Environment}-cfn-templates-${AWS::AccountId}-${AWS::Region}'
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
-            BucketKeyEnabled: true
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-      OwnershipControls:
-        Rules:
-          - ObjectOwnership: BucketOwnerEnforced
-      LifecycleConfiguration:
-        Rules:
-          - Id: expire-superseded-templates
-            Status: Enabled
-            ExpirationInDays: 30
-            AbortIncompleteMultipartUpload:
-              DaysAfterInitiation: 7
-      Tags:
-        - Key: Name
-          Value: !Sub '${ProjectName}-${Environment}-cfn-templates'
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Component
-          Value: cicd
-        - Key: ManagedBy
-          Value: cloudformation
-
-  TemplateBucketPolicy:
-    Type: AWS::S3::BucketPolicy
-    Properties:
-      Bucket: !Ref TemplateBucket
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Sid: DenyInsecureTransport
-            Effect: Deny
-            Principal: '*'
-            Action: s3:*
-            Resource:
-              - !GetAtt TemplateBucket.Arn
-              - !Sub '${TemplateBucket.Arn}/*'
-            Condition:
-              Bool:
-                aws:SecureTransport: 'false'
-
   # ------------------------------------------------------------- Deploy role
   # Assumed by the infrastructure repository workflow through GitHub OIDC. It
   # can drive CloudFormation and upload templates, but it cannot create
@@ -194,6 +97,10 @@ Resources:
     Properties:
       RoleName: !Sub '${ProjectName}-${Environment}-gha-deploy'
       Description: Assumed by GitHub Actions to deploy the CloudFormation root stack.
+      # A full root-stack create runs ~45 min and the deploy workflow holds
+      # one session for the whole wait. At 3600 the credentials expired 14
+      # seconds after the CLI's 60-minute waiter gave up, so the job could
+      # never outlast either ceiling.
       MaxSessionDuration: 7200
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -246,21 +153,44 @@ Resources:
                   - cloudformation:TagResource
                   - cloudformation:UntagResource
                 Resource: '*'
-        - PolicyName: upload-templates
+        # The CloudFormation template bucket lives in its own stack, which
+        # this role creates as the first step of the deploy workflow and then
+        # packages into. It is NOT the pipeline artifact bucket - pipeline.yaml
+        # owns that one. Referenced by name rather than GetAtt, because it is
+        # no longer a resource of this template.
+        - PolicyName: template-bucket
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Sid: PackageTemplates
+              - Sid: ManageTheBucketItself
+                Effect: Allow
+                Action:
+                  - s3:CreateBucket
+                  - s3:DeleteBucket
+                  - s3:PutBucketPolicy
+                  - s3:GetBucketPolicy
+                  - s3:DeleteBucketPolicy
+                  - s3:PutEncryptionConfiguration
+                  - s3:GetEncryptionConfiguration
+                  - s3:PutBucketPublicAccessBlock
+                  - s3:GetBucketPublicAccessBlock
+                  - s3:PutBucketOwnershipControls
+                  - s3:GetBucketOwnershipControls
+                  - s3:PutLifecycleConfiguration
+                  - s3:GetLifecycleConfiguration
+                  - s3:PutBucketTagging
+                  - s3:GetBucketTagging
+                  - s3:GetBucketAcl
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                Resource: !Sub 'arn:${AWS::Partition}:s3:::${ProjectName}-${Environment}-cfn-templates-${AWS::AccountId}-${AWS::Region}'
+              - Sid: PackageTemplatesIntoIt
                 Effect: Allow
                 Action:
                   - s3:PutObject
                   - s3:GetObject
                   - s3:GetObjectVersion
-                  - s3:ListBucket
-                  - s3:GetBucketLocation
-                Resource:
-                  - !GetAtt TemplateBucket.Arn
-                  - !Sub '${TemplateBucket.Arn}/*'
+                Resource: !Sub 'arn:${AWS::Partition}:s3:::${ProjectName}-${Environment}-cfn-templates-${AWS::AccountId}-${AWS::Region}/*'
         - PolicyName: pass-stack-role
           PolicyDocument:
             Version: '2012-10-17'
@@ -402,25 +332,13 @@ Resources:
           Value: cloudformation
 
 Outputs:
-  ConnectionArn:
-    Description: >-
-      Consumed by the root stack, and by CodePipeline through it. Must read
-      AVAILABLE, not PENDING, before a deploy will work.
-    Value: !Ref SourceConnection
-    Export:
-      Name: !Sub '${ProjectName}-${Environment}-ConnectionArn'
-  TemplateBucketName:
-    Description: Value for the CFN_TEMPLATE_BUCKET repository variable.
-    Value: !Ref TemplateBucket
-    Export:
-      Name: !Sub '${ProjectName}-${Environment}-TemplateBucketName'
   DeployRoleArn:
-    Description: Value for the AWS_DEPLOY_ROLE_ARN repository variable.
+    Description: Value for the AWS_DEPLOY_ROLE_ARN repository secret.
     Value: !GetAtt GitHubActionsDeployRole.Arn
     Export:
       Name: !Sub '${ProjectName}-${Environment}-DeployRoleArn'
   StackRoleArn:
-    Description: Passed to CloudFormation by the workflow as --role-arn.
+    Description: Value for the AWS_STACK_ROLE_ARN repository secret; passed to CloudFormation as --role-arn.
     Value: !GetAtt StackRole.Arn
     Export:
       Name: !Sub '${ProjectName}-${Environment}-StackRoleArn'
