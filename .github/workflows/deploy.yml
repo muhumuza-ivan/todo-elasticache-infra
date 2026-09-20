@@ -22,11 +22,16 @@ permissions:
 env:
   STACK_NAME: todo-app-dev
   APP_REPO: todo-elasticache-app   # must match GitHubAppRepo in main.yaml
+  # How long to keep following the stack after the CLI's own waiter gives up.
+  # Must stay under the assumed role's MaxSessionDuration (7200 in
+  # bootstrap.yaml) so the polling credentials cannot expire mid-wait.
+  POLL_TIMEOUT_SECONDS: '6000'
 
 jobs:
   deploy:
     name: Package and deploy
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
@@ -36,6 +41,10 @@ jobs:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
           role-session-name: gha-deploy-${{ github.run_id }}
+          # The default 3600 expired 14 seconds after the CLI waiter gave up,
+          # so raising only the waiter would just move the failure. Capped by
+          # MaxSessionDuration on the role in bootstrap.yaml.
+          role-duration-seconds: 7200
 
       # Holds the packaged child templates only, and cannot be nested inside
       # main.yaml because packaging uploads main.yaml's children into it.
@@ -76,6 +85,12 @@ jobs:
           # application repository id has to be looked up.
           app_repo_id=$(gh api "repos/${{ github.repository_owner }}/${APP_REPO}" --jq .id)
 
+          # `aws cloudformation deploy` waits with a fixed botocore waiter:
+          # 120 attempts 30s apart, so it reports failure after exactly 60
+          # minutes even while the stack is still creating normally. A clean
+          # create runs ~45 min, close enough to trip on a slow RDS. Let the
+          # deploy run, then judge from the stack rather than the exit code.
+          set +e
           aws cloudformation deploy \
             --stack-name "$STACK_NAME" \
             --template-file packaged.yaml \
@@ -87,3 +102,63 @@ jobs:
             --parameter-overrides \
               GitHubOrgId=${{ github.repository_owner_id }} \
               GitHubAppRepoId="$app_repo_id"
+          deploy_rc=$?
+          set -e
+
+          stack_status() {
+            aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+              --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo NO_STACK
+          }
+
+          recent_events() {
+            aws cloudformation describe-stack-events --stack-name "$STACK_NAME" \
+              --max-items 15 \
+              --query 'StackEvents[].[Timestamp,LogicalResourceId,ResourceStatus,ResourceStatusReason]' \
+              --output text || true
+          }
+
+          # States worth waiting on. DELETE_IN_PROGRESS and REVIEW_IN_PROGRESS
+          # are deliberately excluded: neither can ever resolve into this
+          # deploy succeeding, so polling them would just burn the budget.
+          is_progressing() {
+            case "$1" in
+              CREATE_IN_PROGRESS|UPDATE_IN_PROGRESS|UPDATE_COMPLETE_CLEANUP_IN_PROGRESS) return 0 ;;
+              ROLLBACK_IN_PROGRESS|UPDATE_ROLLBACK_IN_PROGRESS) return 0 ;;
+              UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
+          status=$(stack_status)
+
+          # A non-zero exit while the stack is still progressing is the waiter
+          # expiring. Anything else is a real failure and keeps its exit code.
+          if [ "$deploy_rc" -ne 0 ] && ! is_progressing "$status"; then
+            echo "::error::Deploy failed with the stack in $status."
+            recent_events
+            exit "$deploy_rc"
+          fi
+
+          deadline=$(( $(date +%s) + POLL_TIMEOUT_SECONDS ))
+          while is_progressing "$status"; do
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::Gave up after ${POLL_TIMEOUT_SECONDS}s; stack is still $status."
+              echo "The stack is still working. Check it before redeploying."
+              recent_events
+              exit 1
+            fi
+            echo "$(date -u +%H:%M:%S) $status"
+            sleep 30
+            status=$(stack_status)
+          done
+
+          case "$status" in
+            CREATE_COMPLETE|UPDATE_COMPLETE)
+              echo "Stack reached $status."
+              ;;
+            *)
+              echo "::error::Stack settled in $status."
+              recent_events
+              exit 1
+              ;;
+          esac
