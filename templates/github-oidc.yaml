@@ -111,6 +111,7 @@ Resources:
   GitHubActionsEcrPushRole:
     Type: AWS::IAM::Role
     Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-gha-ecr-push'
       Description: !Sub 'Assumed by GitHub Actions in ${GitHubOrg}/${GitHubAppRepo} to push images to ECR.'
       MaxSessionDuration: !Ref MaxSessionDurationSeconds
       AssumeRolePolicyDocument:
