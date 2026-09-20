@@ -58,12 +58,6 @@ Parameters:
     Default: arn:aws:iam::765812221756:oidc-provider/token.actions.githubusercontent.com
 
   # ------------------------------------------------------------------- Wiring
-  ConnectionArn:
-    Type: AWS::SSM::Parameter::Value<String>
-    Default: /todo-app/dev/codeconnections/arn
-    Description: >-
-      Written by the bootstrap stack. Resolved here, at the root, and passed
-      down as a plain string - the children never look it up themselves.
   EcrRepositoryName:
     Type: String
     Default: todo-app
@@ -102,6 +96,41 @@ Parameters:
     Default: 4
 
 Resources:
+  # Declared here, not in the bootstrap stack: nothing about packaging or
+  # authentication depends on it, so it belongs with the application
+  # infrastructure it serves. CodePipeline reads the application repository
+  # through it.
+  #
+  # It is created PENDING. A human completes the GitHub OAuth handshake once in
+  # Developer Tools -> Settings -> Connections; there is no API, CLI or
+  # CloudFormation path for that authorisation. The pipeline cannot pull source
+  # until it reads AVAILABLE.
+  SourceConnection:
+    Type: AWS::CodeStarConnections::Connection
+    Properties:
+      ConnectionName: !Sub '${ProjectName}-${Environment}-github'
+      ProviderType: GitHub
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-github'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Kept for operators and for anything outside CloudFormation that needs it.
+  # The pipeline stack is handed the ARN directly, below.
+  ConnectionArnParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/${ProjectName}/${Environment}/codeconnections/arn'
+      Type: String
+      Value: !Ref SourceConnection
+      Description: CodeConnections connection used by the pipeline source action.
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
   # Order is enforced with DependsOn because the children still wire themselves
   # together with Export/ImportValue. Where a value can be handed over directly
   # it is, via GetAtt on the child's Outputs - that also creates the dependency
@@ -194,7 +223,7 @@ Resources:
       Parameters:
         ProjectName: !Ref ProjectName
         Environment: !Ref Environment
-        ConnectionArn: !Ref ConnectionArn
+        ConnectionArn: !Ref SourceConnection
         EcrRepositoryName: !GetAtt EcrStack.Outputs.RepositoryName
         AppRepositoryId: !Ref AppRepositoryId
         AppBranch: !Ref GitHubAppBranch

@@ -63,6 +63,11 @@ Parameters:
 
 Resources:
   # -------------------------------------------------------- Artifact storage
+  # CodePipeline's own bucket: the source artifact (appspec.yaml and
+  # taskdef.json from the application repository) and the ECR
+  # imageDetail.json land here. Deliberately separate from the bucket that
+  # holds packaged CloudFormation templates - different lifecycle, different
+  # readers, and release state should not share storage with build plumbing.
   ArtifactBucket:
     Type: AWS::S3::Bucket
     UpdateReplacePolicy: Delete

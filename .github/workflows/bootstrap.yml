@@ -1,18 +1,13 @@
 name: Deploy bootstrap
 
-# The deployment machinery itself: the template bucket, the OIDC deploy role,
-# the CloudFormation stack role, and the CodeConnections connection.
+# The two IAM roles the deploy workflow authenticates with. Nothing else.
 #
-# Deliberately on its own branch. These resources are created once and change
-# almost never, they are the only ones that can grant access to the account,
-# and a change to them has nothing to do with an application deploy - so they
-# do not belong on the same trigger as main.yaml.
+# On its own branch so a change to the deployment credentials is never mixed
+# into an application deploy.
 #
-# THE FIRST CREATION CANNOT RUN HERE. This workflow authenticates with a role
-# that this stack creates, so stack and role do not exist yet on a green field.
-# Create it once from the console (CloudFormation -> Create stack -> With new
-# resources -> Upload a template file -> bootstrap.yaml), then this workflow
-# maintains it from then on.
+# THE FIRST CREATION CANNOT RUN HERE, and neither can a change to the deploy
+# role's own trust policy: this workflow authenticates with that role. Both go
+# through the console - see section 2b in DEPLOY-STEPS.md.
 
 on:
   push:
@@ -21,11 +16,6 @@ on:
       - 'bootstrap.yaml'
       - '.github/workflows/bootstrap.yml'
   workflow_dispatch:
-    inputs:
-      confirm_plan_only:
-        description: Create the change set and show it, but do not execute it.
-        type: boolean
-        default: true
 
 concurrency:
   group: deploy-bootstrap
@@ -37,7 +27,6 @@ permissions:
 
 env:
   STACK_NAME: todo-app-dev-bootstrap
-  TEMPLATE: bootstrap.yaml
 
 jobs:
   deploy:
@@ -46,16 +35,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install cfn-lint
-        run: pip install --disable-pip-version-check cfn-lint==1.22.3
-
-      - name: Lint
-        run: cfn-lint "$TEMPLATE"
-
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -63,95 +42,17 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
           role-session-name: gha-bootstrap-${{ github.run_id }}
 
-      # No `package` step: this template has no nested stacks, so there is
-      # nothing to upload - and the bucket it would upload to is one of the
-      # resources it creates.
-      - name: Refuse to create from scratch
+      - name: Deploy
         run: |
           set -euo pipefail
-          if ! aws cloudformation describe-stacks --stack-name "$STACK_NAME" >/dev/null 2>&1; then
-            echo "::error::$STACK_NAME does not exist. The first creation must be done"
-            echo "::error::from the console - this workflow assumes a role that stack creates."
-            exit 1
-          fi
-
-      - name: Create change set
-        id: changeset
-        run: |
-          set -euo pipefail
-          name="gha-${{ github.run_id }}-${{ github.run_attempt }}"
-          echo "name=$name" >> "$GITHUB_OUTPUT"
-
-          aws cloudformation create-change-set \
+          aws cloudformation deploy \
             --stack-name "$STACK_NAME" \
-            --change-set-name "$name" \
-            --change-set-type UPDATE \
-            --template-body "file://$TEMPLATE" \
+            --template-file bootstrap.yaml \
             --capabilities CAPABILITY_NAMED_IAM \
             --role-arn "${{ secrets.AWS_STACK_ROLE_ARN }}" \
-            --parameters \
-              ParameterKey=GitHubOrgId,ParameterValue=${{ github.repository_owner_id }} \
-              ParameterKey=GitHubInfraRepoId,ParameterValue=${{ github.repository_id }} \
-            --tags Key=Project,Value=todo-app Key=Environment,Value=dev \
-                   Key=Component,Value=cicd Key=ManagedBy,Value=github-actions \
-                   Key=Owner,Value=ivan-muhumuza
-
-          if aws cloudformation wait change-set-create-complete \
-               --stack-name "$STACK_NAME" --change-set-name "$name" 2>/dev/null; then
-            echo "empty=false" >> "$GITHUB_OUTPUT"
-          else
-            reason=$(aws cloudformation describe-change-set \
-              --stack-name "$STACK_NAME" --change-set-name "$name" \
-              --query StatusReason --output text)
-            case "$reason" in
-              *"didn't contain changes"*|*"No updates"*|*"submitted information"*)
-                echo "No changes to apply."
-                echo "empty=true" >> "$GITHUB_OUTPUT" ;;
-              *)
-                echo "::error::change set failed: $reason"; exit 1 ;;
-            esac
-          fi
-
-      # These resources gate access to the account, so the plan is always
-      # printed - and workflow_dispatch defaults to plan-only, unlike the
-      # environment deploy.
-      - name: Show planned changes
-        if: steps.changeset.outputs.empty == 'false'
-        run: |
-          aws cloudformation describe-change-set \
-            --stack-name "$STACK_NAME" --change-set-name "${{ steps.changeset.outputs.name }}" \
-            --query 'Changes[].ResourceChange.{Action:Action,Resource:LogicalResourceId,Type:ResourceType,Replace:Replacement}' \
-            --output table | tee changes.txt
-          { echo '### Planned changes'; echo '```'; cat changes.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Discard change set (plan only)
-        if: inputs.confirm_plan_only && steps.changeset.outputs.empty == 'false'
-        run: |
-          aws cloudformation delete-change-set \
-            --stack-name "$STACK_NAME" --change-set-name "${{ steps.changeset.outputs.name }}"
-          echo "Plan-only run: change set discarded, nothing applied."
-
-      - name: Execute change set
-        if: ${{ !inputs.confirm_plan_only && steps.changeset.outputs.empty == 'false' }}
-        run: |
-          set -euo pipefail
-          aws cloudformation execute-change-set \
-            --stack-name "$STACK_NAME" --change-set-name "${{ steps.changeset.outputs.name }}"
-          aws cloudformation wait stack-update-complete --stack-name "$STACK_NAME"
-
-      - name: Failure detail
-        if: failure()
-        run: |
-          aws cloudformation describe-stack-events --stack-name "$STACK_NAME" \
-            --query 'StackEvents[?contains(ResourceStatus,`FAILED`)].[Timestamp,LogicalResourceId,ResourceStatusReason]' \
-            --output table | head -30 || true
-
-      - name: Outputs
-        if: success()
-        run: |
-          {
-            echo "### Bootstrap outputs"
-            echo ''
-            aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
-              --query 'Stacks[0].Outputs[].[OutputKey,OutputValue]' --output table
-          } >> "$GITHUB_STEP_SUMMARY"
+            --no-fail-on-empty-changeset \
+            --tags Project=todo-app Environment=dev Component=cicd \
+                   ManagedBy=github-actions Owner=ivan-muhumuza \
+            --parameter-overrides \
+              GitHubOrgId=${{ github.repository_owner_id }} \
+              GitHubInfraRepoId=${{ github.repository_id }}

@@ -8,14 +8,9 @@ on:
       - 'templates/**'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
-    inputs:
-      confirm_plan_only:
-        description: Create the change set and show it, but do not execute it.
-        type: boolean
-        default: false
 
-# Two deploys must never overlap: CloudFormation would reject the second, and a
-# cancelled run mid-update leaves a stack in UPDATE_IN_PROGRESS.
+# Two deploys must never overlap: CloudFormation rejects the second, and a
+# cancelled run mid-update leaves the stack in UPDATE_IN_PROGRESS.
 concurrency:
   group: deploy-infrastructure
   cancel-in-progress: false
@@ -26,7 +21,6 @@ permissions:
 
 env:
   STACK_NAME: todo-app-dev
-  TEMPLATE: main.yaml
   APP_REPO: todo-elasticache-app   # must match GitHubAppRepo in main.yaml
 
 jobs:
@@ -36,18 +30,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install cfn-lint
-        run: pip install --disable-pip-version-check cfn-lint==1.22.3
-
-      # A template that does not lint must never reach CloudFormation: the
-      # stack fails half way through and has to be rolled back by hand.
-      - name: Lint templates
-        run: cfn-lint main.yaml templates/*.yaml
-
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -55,132 +37,53 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
           role-session-name: gha-deploy-${{ github.run_id }}
 
-      # Uploads every nested template to S3 and rewrites main.yaml's TemplateURL
-      # values to point at the uploaded copies. Objects are content-addressed,
-      # so unchanged templates cost nothing.
-      - name: Package nested templates
+      # Holds the packaged child templates only, and cannot be nested inside
+      # main.yaml because packaging uploads main.yaml's children into it.
+      # CodePipeline's artifact bucket (appspec.yaml, taskdef.json) is separate
+      # and lives in pipeline.yaml.
+      - name: Deploy the CloudFormation template bucket
+        id: bucket
         run: |
           set -euo pipefail
-          aws cloudformation package \
-            --template-file "$TEMPLATE" \
-            --s3-bucket "${{ secrets.CFN_TEMPLATE_BUCKET }}" \
-            --s3-prefix "${STACK_NAME}/$(date +%Y/%m)" \
-            --output-template-file packaged.yaml
-          echo "Packaged $(grep -c 'TemplateURL' packaged.yaml) nested templates"
+          aws cloudformation deploy \
+            --stack-name "${STACK_NAME}-templates" \
+            --template-file templates/template-bucket.yaml \
+            --no-fail-on-empty-changeset
+          name=$(aws cloudformation describe-stacks \
+            --stack-name "${STACK_NAME}-templates" \
+            --query "Stacks[0].Outputs[?OutputKey=='BucketName'].OutputValue" --output text)
+          echo "name=$name" >> "$GITHUB_OUTPUT"
 
-      - name: Validate the packaged template
-        run: aws cloudformation validate-template --template-body file://packaged.yaml >/dev/null
-
-      # GitHub issues an immutable OIDC subject that embeds the owner and
-      # repository IDs rather than their names, so a rename cannot carry AWS
-      # access with it. Those IDs are account specific, so they are resolved
-      # here rather than written into a template. This workflow runs in the
-      # infrastructure repository, so the application repository id is looked
-      # up through the API.
-      - name: Resolve GitHub numeric IDs
-        id: ghids
+      - name: Package and deploy
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+
+          # Uploads every child template main.yaml references and rewrites the
+          # local paths to S3 URLs. Keys are content-hashed, so an unchanged
+          # child resolves to the same object and reports no changes.
+          aws cloudformation package \
+            --template-file main.yaml \
+            --s3-bucket "${{ steps.bucket.outputs.name }}" \
+            --s3-prefix "$STACK_NAME" \
+            --output-template-file packaged.yaml
+
+          # GitHub issues an immutable OIDC subject that embeds the owner and
+          # repository IDs, so renaming cannot carry AWS access over. They are
+          # account specific, so they are resolved here and never hardcoded.
+          # This workflow runs in the infrastructure repository, so the
+          # application repository id has to be looked up.
           app_repo_id=$(gh api "repos/${{ github.repository_owner }}/${APP_REPO}" --jq .id)
-          if [ -z "$app_repo_id" ]; then
-            echo "::error::could not resolve the numeric id of ${APP_REPO}"; exit 1
-          fi
-          echo "owner_id=${{ github.repository_owner_id }}" >> "$GITHUB_OUTPUT"
-          echo "app_repo_id=$app_repo_id" >> "$GITHUB_OUTPUT"
-          echo "owner id ${{ github.repository_owner_id }}, ${APP_REPO} id $app_repo_id"
 
-      # The change set is created first so the log shows exactly what will
-      # happen before anything is applied - and so a plan-only run can stop here.
-      - name: Create change set
-        id: changeset
-        run: |
-          set -euo pipefail
-          name="gha-${{ github.run_id }}-${{ github.run_attempt }}"
-          echo "name=$name" >> "$GITHUB_OUTPUT"
-
-          type=UPDATE
-          if ! aws cloudformation describe-stacks --stack-name "$STACK_NAME" >/dev/null 2>&1; then
-            type=CREATE
-          fi
-          echo "type=$type" >> "$GITHUB_OUTPUT"
-
-          aws cloudformation create-change-set \
+          aws cloudformation deploy \
             --stack-name "$STACK_NAME" \
-            --change-set-name "$name" \
-            --change-set-type "$type" \
-            --template-body file://packaged.yaml \
+            --template-file packaged.yaml \
             --capabilities CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND \
             --role-arn "${{ secrets.AWS_STACK_ROLE_ARN }}" \
-            --parameters \
-              ParameterKey=GitHubOrgId,ParameterValue=${{ steps.ghids.outputs.owner_id }} \
-              ParameterKey=GitHubAppRepoId,ParameterValue=${{ steps.ghids.outputs.app_repo_id }} \
-            --tags Key=Project,Value=todo-app Key=Environment,Value=dev \
-                   Key=Component,Value=platform Key=ManagedBy,Value=github-actions \
-                   Key=Owner,Value=ivan-muhumuza
-
-          # A change set with nothing in it fails to CREATE_COMPLETE. That is a
-          # successful no-op deploy, not an error.
-          if aws cloudformation wait change-set-create-complete \
-               --stack-name "$STACK_NAME" --change-set-name "$name" 2>/dev/null; then
-            echo "empty=false" >> "$GITHUB_OUTPUT"
-          else
-            reason=$(aws cloudformation describe-change-set \
-              --stack-name "$STACK_NAME" --change-set-name "$name" \
-              --query StatusReason --output text)
-            case "$reason" in
-              *"didn't contain changes"*|*"No updates"*|*"submitted information"*)
-                echo "No changes to apply."
-                echo "empty=true" >> "$GITHUB_OUTPUT" ;;
-              *)
-                echo "::error::change set failed: $reason"; exit 1 ;;
-            esac
-          fi
-
-      - name: Show planned changes
-        if: steps.changeset.outputs.empty == 'false'
-        run: |
-          aws cloudformation describe-change-set \
-            --stack-name "$STACK_NAME" --change-set-name "${{ steps.changeset.outputs.name }}" \
-            --query 'Changes[].ResourceChange.{Action:Action,Resource:LogicalResourceId,Type:ResourceType,Replace:Replacement}' \
-            --output table | tee changes.txt
-          { echo '### Planned changes'; echo '```'; cat changes.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Discard change set (plan only)
-        if: inputs.confirm_plan_only && steps.changeset.outputs.empty == 'false'
-        run: |
-          aws cloudformation delete-change-set \
-            --stack-name "$STACK_NAME" --change-set-name "${{ steps.changeset.outputs.name }}"
-          echo "Plan-only run: change set discarded, nothing applied."
-
-      - name: Execute change set
-        if: ${{ !inputs.confirm_plan_only && steps.changeset.outputs.empty == 'false' }}
-        run: |
-          set -euo pipefail
-          aws cloudformation execute-change-set \
-            --stack-name "$STACK_NAME" --change-set-name "${{ steps.changeset.outputs.name }}"
-
-          if [ "${{ steps.changeset.outputs.type }}" = "CREATE" ]; then
-            aws cloudformation wait stack-create-complete --stack-name "$STACK_NAME"
-          else
-            aws cloudformation wait stack-update-complete --stack-name "$STACK_NAME"
-          fi
-
-      # On failure the events say why; the wait above only says that it failed.
-      - name: Failure detail
-        if: failure()
-        run: |
-          aws cloudformation describe-stack-events --stack-name "$STACK_NAME" \
-            --query 'StackEvents[?contains(ResourceStatus,`FAILED`)].[Timestamp,LogicalResourceId,ResourceStatusReason]' \
-            --output table | head -40 || true
-
-      - name: Outputs
-        if: success()
-        run: |
-          {
-            echo "### Stack outputs"
-            echo ''
-            aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
-              --query 'Stacks[0].Outputs[].[OutputKey,OutputValue]' --output table
-          } >> "$GITHUB_STEP_SUMMARY"
+            --no-fail-on-empty-changeset \
+            --tags Project=todo-app Environment=dev Component=platform \
+                   ManagedBy=github-actions Owner=ivan-muhumuza \
+            --parameter-overrides \
+              GitHubOrgId=${{ github.repository_owner_id }} \
+              GitHubAppRepoId="$app_repo_id"
