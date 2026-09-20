@@ -1,0 +1,155 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Amazon ElastiCache for Redis replication group in its own dedicated subnets,
+  Multi-AZ with automatic failover, encrypted in transit and at rest. Endpoint
+  details are published to SSM Parameter Store for the ECS task definition.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: todo-app
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+  CacheNodeType:
+    Type: String
+    Default: cache.t4g.micro
+    AllowedValues: [cache.t4g.micro, cache.t4g.small, cache.t3.micro, cache.t3.small]
+  CacheEngineVersion:
+    Type: String
+    Default: '7.1'
+  NumCacheNodes:
+    Type: Number
+    Default: 2
+    MinValue: 2
+    MaxValue: 4
+    Description: One primary plus N-1 replicas, spread across AZs.
+  SnapshotRetentionDays:
+    Type: Number
+    Default: 1
+    MinValue: 0
+    MaxValue: 35
+
+Resources:
+  CacheSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties:
+      CacheSubnetGroupName: !Sub '${ProjectName}-${Environment}-cache-subnets'
+      Description: Dedicated private subnets for the Redis nodes.
+      SubnetIds:
+        Fn::Split:
+          - ','
+          - Fn::ImportValue: !Sub '${ProjectName}-${Environment}-CacheSubnets'
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  CacheParameterGroup:
+    Type: AWS::ElastiCache::ParameterGroup
+    Properties:
+      CacheParameterGroupFamily: redis7
+      Description: !Sub 'Cache-aside tuning for ${ProjectName}-${Environment}'
+      Properties:
+        # The application sets its own TTLs, but evicting the least recently used
+        # key with a TTL keeps the cluster healthy if it ever fills up.
+        maxmemory-policy: volatile-lru
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  RedisReplicationGroup:
+    Type: AWS::ElastiCache::ReplicationGroup
+    UpdateReplacePolicy: Delete
+    DeletionPolicy: Delete
+    Properties:
+      ReplicationGroupId: !Sub '${ProjectName}-${Environment}-redis'
+      ReplicationGroupDescription: !Sub 'Read-through cache for ${ProjectName}-${Environment}'
+      Engine: redis
+      EngineVersion: !Ref CacheEngineVersion
+      CacheNodeType: !Ref CacheNodeType
+      NumCacheClusters: !Ref NumCacheNodes
+      AutomaticFailoverEnabled: true
+      MultiAZEnabled: true
+      Port: 6379
+      CacheSubnetGroupName: !Ref CacheSubnetGroup
+      CacheParameterGroupName: !Ref CacheParameterGroup
+      SecurityGroupIds:
+        - Fn::ImportValue: !Sub '${ProjectName}-${Environment}-CacheSecurityGroupId'
+      AtRestEncryptionEnabled: true
+      TransitEncryptionEnabled: true
+      AutoMinorVersionUpgrade: true
+      SnapshotRetentionLimit: !Ref SnapshotRetentionDays
+      PreferredMaintenanceWindow: sun:05:00-sun:06:00
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-redis'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Tier
+          Value: cache
+
+  RedisHostParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/${ProjectName}/${Environment}/redis/host'
+      Type: String
+      Value: !GetAtt RedisReplicationGroup.PrimaryEndPoint.Address
+      Description: Primary endpoint for writes and reads (cache-aside).
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  RedisPortParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/${ProjectName}/${Environment}/redis/port'
+      Type: String
+      Value: !GetAtt RedisReplicationGroup.PrimaryEndPoint.Port
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  RedisSslParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/${ProjectName}/${Environment}/redis/ssl'
+      Type: String
+      Value: 'true'
+      Description: >-
+        Matches TransitEncryptionEnabled on the replication group. Flipping this
+        parameter and restarting the service is enough to change client behaviour -
+        no image rebuild.
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  RedisReaderHostParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/${ProjectName}/${Environment}/redis/reader-host'
+      Type: String
+      Value: !GetAtt RedisReplicationGroup.ReaderEndPoint.Address
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+Outputs:
+  RedisPrimaryEndpoint:
+    Value: !GetAtt RedisReplicationGroup.PrimaryEndPoint.Address
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-RedisPrimaryEndpoint'
+  RedisReaderEndpoint:
+    Value: !GetAtt RedisReplicationGroup.ReaderEndPoint.Address
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-RedisReaderEndpoint'
+  RedisPort:
+    Value: !GetAtt RedisReplicationGroup.PrimaryEndPoint.Port
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-RedisPort'

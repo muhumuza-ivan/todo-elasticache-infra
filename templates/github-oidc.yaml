@@ -1,0 +1,169 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  GitHub Actions OIDC trust for the To-Do application. Creates (or reuses) the
+  token.actions.githubusercontent.com IAM OIDC provider and a short-lived,
+  repo-scoped role that the application workflow assumes to push container
+  images to ECR. No IAM users and no long-lived access keys are involved.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: todo-app
+    Description: Prefix used for resource names and cross-stack exports.
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+
+  GitHubOrg:
+    Type: String
+    Description: GitHub organisation or user that owns the application repository.
+    AllowedPattern: ^[A-Za-z0-9][A-Za-z0-9-]{0,38}$
+  GitHubAppRepo:
+    Type: String
+    Description: Name of the repository holding the application code and Dockerfile.
+    AllowedPattern: ^[A-Za-z0-9._-]{1,100}$
+  GitHubAppBranch:
+    Type: String
+    Default: main
+    Description: >-
+      Only workflow runs on this branch of the application repository may assume
+      the role. Tag and pull_request runs are deliberately excluded.
+    AllowedPattern: ^[A-Za-z0-9._/-]{1,255}$
+
+  EcrRepositoryName:
+    Type: String
+    Default: todo-app
+    Description: >-
+      ECR repository the role may push to. Kept as a parameter so this stack does
+      not depend on the ECR stack; the ARN is built from the name.
+    AllowedPattern: ^[a-z0-9][a-z0-9._/-]{1,255}$
+
+  CreateOidcProvider:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      An account can hold only one IAM OIDC provider per issuer URL. Set to
+      false when GitHub OIDC is already wired up in this account and supply
+      ExistingOidcProviderArn instead.
+  ExistingOidcProviderArn:
+    Type: String
+    Default: ''
+    Description: ARN of the existing GitHub OIDC provider. Used only when CreateOidcProvider is false.
+
+  MaxSessionDurationSeconds:
+    Type: Number
+    Default: 3600
+    MinValue: 3600
+    MaxValue: 43200
+    Description: Upper bound on the lifetime of credentials handed to a workflow run.
+
+Conditions:
+  ShouldCreateProvider: !Equals [!Ref CreateOidcProvider, 'true']
+
+Resources:
+  # ------------------------------------------------------------- OIDC provider
+  # Thumbprints are still accepted by CloudFormation, but IAM maintains the
+  # trust chain for token.actions.githubusercontent.com itself, so a GitHub
+  # certificate rotation does not require a stack update.
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: ShouldCreateProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+        - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-github-oidc'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: cloudformation
+
+  # ----------------------------------------------------- GitHub Actions role
+  # Trust is pinned to one repository and one branch through the `sub` claim,
+  # and to the AWS STS audience through `aud`. Permissions cover exactly what an
+  # image build needs: authenticate to the registry, upload layers, put the tag.
+  # Deployment itself is driven by EventBridge -> CodePipeline -> CodeDeploy, so
+  # the workflow needs no ECS, CodeDeploy or CloudFormation access at all.
+  GitHubActionsEcrPushRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: !Sub 'Assumed by GitHub Actions in ${GitHubOrg}/${GitHubAppRepo} to push images to ECR.'
+      MaxSessionDuration: !Ref MaxSessionDurationSeconds
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - ShouldCreateProvider
+                - !GetAtt GitHubOidcProvider.Arn
+                - !Ref ExistingOidcProviderArn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOrg}/${GitHubAppRepo}:ref:refs/heads/${GitHubAppBranch}'
+      Policies:
+        - PolicyName: ecr-login
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # GetAuthorizationToken has no resource-level permissions.
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+        - PolicyName: ecr-push-image
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                  # Reads keep layer caching and image-tag checks working.
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:DescribeImages
+                  - ecr:DescribeRepositories
+                Resource: !Sub 'arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${EcrRepositoryName}'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-github-actions-ecr'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: cloudformation
+
+Outputs:
+  OidcProviderArn:
+    Description: IAM OIDC provider trusted for GitHub Actions tokens.
+    Value: !If
+      - ShouldCreateProvider
+      - !GetAtt GitHubOidcProvider.Arn
+      - !Ref ExistingOidcProviderArn
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-GitHubOidcProviderArn'
+  GitHubActionsRoleArn:
+    Description: >-
+      Value for the application workflow's role-to-assume input
+      (aws-actions/configure-aws-credentials).
+    Value: !GetAtt GitHubActionsEcrPushRole.Arn
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-GitHubActionsRoleArn'
+  TrustedSubject:
+    Description: The single GitHub OIDC subject claim allowed to assume the role.
+    Value: !Sub 'repo:${GitHubOrg}/${GitHubAppRepo}:ref:refs/heads/${GitHubAppBranch}'

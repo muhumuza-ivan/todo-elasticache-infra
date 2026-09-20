@@ -1,0 +1,150 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Container registry for the To-Do application, plus the SSM parameters that let
+  the application stack and the pipeline stack find it without carrying an
+  account ID. Separated from the application stacks because the registry outlives
+  them: the first image must exist before the ECS service can ever start, and
+  there is no NAT gateway to fall back on a public image.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: todo-app
+    Description: Prefix used for resource names and cross-stack exports.
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+
+  RepositoryName:
+    Type: String
+    Default: todo-app
+    Description: >-
+      Must match the ECR_REPOSITORY repository variable in the application
+      repository and the EcrRepositoryName parameter of the OIDC stack.
+    AllowedPattern: ^[a-z0-9][a-z0-9._/-]{1,255}$
+
+  MaxImageCount:
+    Type: Number
+    Default: 15
+    MinValue: 3
+    MaxValue: 1000
+    Description: Images retained before the oldest are expired. Keeps the registry bill flat.
+
+  UntaggedExpiryDays:
+    Type: Number
+    Default: 3
+    MinValue: 1
+    MaxValue: 365
+    Description: >-
+      Buildx writes intermediate manifests that end up untagged once :latest
+      moves. They are useless after a build and are cleaned up on this schedule.
+
+  ScanOnPush:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Basic vulnerability scanning of every pushed image.
+
+Conditions:
+  ShouldScanOnPush: !Equals [!Ref ScanOnPush, 'true']
+
+Resources:
+  Repository:
+    Type: AWS::ECR::Repository
+    # The registry is not application state: a deleted image is one rebuild
+    # away, and blocking stack deletion on a non-empty repository is the single
+    # most common teardown snag.
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Ref RepositoryName
+      # MUTABLE is load bearing. The build workflow re-points :latest at each new
+      # digest, and the EventBridge rule in pipeline.yaml fires on exactly that
+      # tag. IMMUTABLE would make every deployment after the first one fail.
+      ImageTagMutability: MUTABLE
+      EmptyOnDelete: true
+      ImageScanningConfiguration:
+        ScanOnPush: !If [ShouldScanOnPush, true, false]
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      LifecyclePolicy:
+        LifecyclePolicyText: !Sub |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Expire untagged manifests left behind by buildx",
+                "selection": {
+                  "tagStatus": "untagged",
+                  "countType": "sinceImagePushed",
+                  "countUnit": "days",
+                  "countNumber": ${UntaggedExpiryDays}
+                },
+                "action": { "type": "expire" }
+              },
+              {
+                "rulePriority": 2,
+                "description": "Keep the most recent images, expire the rest",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": ${MaxImageCount}
+                },
+                "action": { "type": "expire" }
+              }
+            ]
+          }
+      Tags:
+        - Key: Name
+          Value: !Ref RepositoryName
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: registry
+        - Key: ManagedBy
+          Value: cloudformation
+
+  # ------------------------------------------------------------ SSM parameters
+  # app.yaml takes the URI (it builds the initial task definition image) and
+  # pipeline.yaml takes the bare name (the ECR source action and the EventBridge
+  # event pattern both key off the repository name). Both are consumed as
+  # AWS::SSM::Parameter::Value<String>, so neither stack holds an account ID.
+  RepositoryUriParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/${ProjectName}/${Environment}/ecr/repository-uri'
+      Type: String
+      Value: !GetAtt Repository.RepositoryUri
+      Description: Registry URI without a tag, consumed by app.yaml.
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  RepositoryNameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/${ProjectName}/${Environment}/ecr/repository-name'
+      Type: String
+      Value: !Ref Repository
+      Description: Repository name, consumed by pipeline.yaml.
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+Outputs:
+  RepositoryUri:
+    Description: Value the application workflow pushes to.
+    Value: !GetAtt Repository.RepositoryUri
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-EcrRepositoryUri'
+  RepositoryName:
+    Value: !Ref Repository
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-EcrRepositoryName'
+  RepositoryArn:
+    Value: !GetAtt Repository.Arn
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-EcrRepositoryArn'

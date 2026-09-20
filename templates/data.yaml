@@ -1,0 +1,301 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Multi-AZ Amazon RDS for PostgreSQL in the dedicated RDS subnets, fronted by an
+  RDS Proxy in its own dedicated subnets. Credentials live in Secrets Manager;
+  connection coordinates are published to SSM Parameter Store so the ECS task
+  definition can reference them statically.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: todo-app
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+  DbInstanceClass:
+    Type: String
+    Default: db.t3.micro
+    AllowedValues: [db.t3.micro, db.t3.small, db.t3.medium, db.t3.large]
+  DbEngineVersion:
+    Type: String
+    Default: '16'
+    Description: Major version is enough - RDS selects the latest supported minor.
+  DbAllocatedStorage:
+    Type: Number
+    Default: 20
+    MinValue: 20
+  DbMaxAllocatedStorage:
+    Type: Number
+    Default: 100
+    Description: Upper bound for storage autoscaling.
+  DbName:
+    Type: String
+    Default: todoapp
+    AllowedPattern: ^[a-zA-Z][a-zA-Z0-9_]*$
+  DbMasterUsername:
+    Type: String
+    Default: todoadmin
+    AllowedPattern: ^[a-zA-Z][a-zA-Z0-9_]*$
+  BackupRetentionDays:
+    Type: Number
+    Default: 7
+    MinValue: 1
+    MaxValue: 35
+  MultiAz:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+  DeletionProtection:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Keep false for a lab so the stack can be torn down cleanly.
+
+Conditions:
+  IsMultiAz: !Equals [!Ref MultiAz, 'true']
+  IsProtected: !Equals [!Ref DeletionProtection, 'true']
+
+Resources:
+  # ------------------------------------------------------------- Credentials
+  #
+  # There is no AWS::SecretsManager::Secret here on purpose. The master password
+  # is managed by RDS itself (ManageMasterUserPassword on DbInstance below): RDS
+  # generates it, writes it to a Secrets Manager secret it owns, and rotates it
+  # every seven days without anything else in this project being involved.
+  #
+  # The alternative - generating the secret here and feeding it to the instance
+  # with {{resolve:secretsmanager:...}} - produces a password that is created
+  # once at stack build time and then never changes, because nothing rotates it.
+  # It also means the value passes through CloudFormation. Neither is true of
+  # the managed secret: no human, and no template, ever handles the password.
+  #
+  # The secret's ARN is available as !GetAtt DbInstance.MasterUserSecret.SecretArn
+  # and its lifecycle is tied to the instance - deleting the instance deletes the
+  # secret with it.
+
+  # -------------------------------------------------------------- PostgreSQL
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupName: !Sub '${ProjectName}-${Environment}-db-subnets'
+      DBSubnetGroupDescription: Dedicated private subnets for the RDS instance.
+      SubnetIds:
+        Fn::Split:
+          - ','
+          - Fn::ImportValue: !Sub '${ProjectName}-${Environment}-RdsSubnets'
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  DbParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Description: !Sub 'Parameter group for ${ProjectName}-${Environment}'
+      Family: !Sub 'postgres${DbEngineVersion}'
+      Parameters:
+        # RDS Proxy pins connections; make sure the server side enforces TLS.
+        rds.force_ssl: '1'
+        log_min_duration_statement: '1000'
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  DbInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub '${ProjectName}-${Environment}-postgres'
+      Engine: postgres
+      EngineVersion: !Ref DbEngineVersion
+      DBInstanceClass: !Ref DbInstanceClass
+      DBName: !Ref DbName
+      # The username is not a secret and stays declarative. The password is
+      # never specified - MasterUserPassword and ManageMasterUserPassword are
+      # mutually exclusive, and RDS owns the password end to end.
+      MasterUsername: !Ref DbMasterUsername
+      ManageMasterUserPassword: true
+      AllocatedStorage: !Ref DbAllocatedStorage
+      MaxAllocatedStorage: !Ref DbMaxAllocatedStorage
+      StorageType: gp3
+      StorageEncrypted: true
+      MultiAZ: !If [IsMultiAz, true, false]
+      PubliclyAccessible: false
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      DBParameterGroupName: !Ref DbParameterGroup
+      VPCSecurityGroups:
+        - Fn::ImportValue: !Sub '${ProjectName}-${Environment}-RdsSecurityGroupId'
+      BackupRetentionPeriod: !Ref BackupRetentionDays
+      PreferredBackupWindow: 02:00-03:00
+      PreferredMaintenanceWindow: sun:03:30-sun:04:30
+      AutoMinorVersionUpgrade: true
+      CopyTagsToSnapshot: true
+      DeletionProtection: !If [IsProtected, true, false]
+      EnableCloudwatchLogsExports:
+        - postgresql
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-postgres'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Tier
+          Value: rds
+
+  # -------------------------------------------------------------- RDS Proxy
+  DbProxyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-rdsproxy'
+      Description: Lets RDS Proxy read the database credentials from Secrets Manager.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: rds.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: read-db-secret
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource: !GetAtt DbInstance.MasterUserSecret.SecretArn
+              - Effect: Allow
+                Action: kms:Decrypt
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub 'secretsmanager.${AWS::Region}.amazonaws.com'
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  DbProxy:
+    Type: AWS::RDS::DBProxy
+    Properties:
+      DBProxyName: !Sub '${ProjectName}-${Environment}-proxy'
+      EngineFamily: POSTGRESQL
+      RoleArn: !GetAtt DbProxyRole.Arn
+      RequireTLS: true
+      IdleClientTimeout: 1800
+      DebugLogging: false
+      Auth:
+        - AuthScheme: SECRETS
+          # RDS rotates this secret on its own schedule. The proxy reads the
+          # current version each time it authenticates, so a rotation needs no
+          # stack update and no application restart.
+          SecretArn: !GetAtt DbInstance.MasterUserSecret.SecretArn
+          IAMAuth: DISABLED
+          ClientPasswordAuthType: POSTGRES_SCRAM_SHA_256
+      VpcSubnetIds:
+        Fn::Split:
+          - ','
+          - Fn::ImportValue: !Sub '${ProjectName}-${Environment}-ProxySubnets'
+      VpcSecurityGroupIds:
+        - Fn::ImportValue: !Sub '${ProjectName}-${Environment}-ProxySecurityGroupId'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-proxy'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Tier
+          Value: rds-proxy
+
+  DbProxyTargetGroup:
+    Type: AWS::RDS::DBProxyTargetGroup
+    Properties:
+      DBProxyName: !Ref DbProxy
+      TargetGroupName: default
+      DBInstanceIdentifiers:
+        - !Ref DbInstance
+      ConnectionPoolConfigurationInfo:
+        MaxConnectionsPercent: 90
+        MaxIdleConnectionsPercent: 50
+        ConnectionBorrowTimeout: 120
+
+  # ----------------------------------------------- Parameters for the task def
+  # taskdef.json reads these by name, so nothing about the database has to be
+  # injected into the pipeline at deploy time.
+  DbHostParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/${ProjectName}/${Environment}/db/host'
+      Type: String
+      Value: !GetAtt DbProxy.Endpoint
+      Description: RDS Proxy endpoint - the application never talks to the instance directly.
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  DbPortParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/${ProjectName}/${Environment}/db/port'
+      Type: String
+      Value: '5432'
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  DbNameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/${ProjectName}/${Environment}/db/name'
+      Type: String
+      Value: !Ref DbName
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  DbSecretArnParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/${ProjectName}/${Environment}/db/secret-arn'
+      Type: String
+      Value: !GetAtt DbInstance.MasterUserSecret.SecretArn
+      Description: >-
+        ARN of the RDS-managed Secrets Manager secret holding the database
+        username and password. The application resolves it at startup with the
+        AWS SDK, which keeps the credential out of the task definition entirely.
+        An ARN rather than a name because RDS generates the name itself
+        (rds!db-<uuid>); GetSecretValue accepts either.
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+Outputs:
+  DbProxyEndpoint:
+    Value: !GetAtt DbProxy.Endpoint
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-DbProxyEndpoint'
+  DbSecretArn:
+    Description: RDS-managed master user secret, rotated by RDS every seven days.
+    Value: !GetAtt DbInstance.MasterUserSecret.SecretArn
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-DbSecretArn'
+  DbInstanceEndpoint:
+    Value: !GetAtt DbInstance.Endpoint.Address
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-DbInstanceEndpoint'
+  DbNameOut:
+    Value: !Ref DbName
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-DbName'

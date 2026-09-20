@@ -1,0 +1,5 @@
+# W3002 fires on TemplateURL values that are local paths. That is deliberate:
+# main.yaml is built for `aws cloudformation package`, which uploads each child
+# template to S3 and rewrites those paths before the deploy.
+ignore_checks:
+  - W3002

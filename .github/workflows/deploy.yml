@@ -1,0 +1,162 @@
+name: Deploy infrastructure
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'main.yaml'
+      - 'templates/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+    inputs:
+      confirm_plan_only:
+        description: Create the change set and show it, but do not execute it.
+        type: boolean
+        default: false
+
+# Two deploys must never overlap: CloudFormation would reject the second, and a
+# cancelled run mid-update leaves a stack in UPDATE_IN_PROGRESS.
+concurrency:
+  group: deploy-infrastructure
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write   # request the OIDC token; no AWS keys are stored
+
+env:
+  STACK_NAME: todo-app-dev
+  TEMPLATE: main.yaml
+
+jobs:
+  deploy:
+    name: Package and deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install cfn-lint
+        run: pip install --disable-pip-version-check cfn-lint==1.22.3
+
+      # A template that does not lint must never reach CloudFormation: the
+      # stack fails half way through and has to be rolled back by hand.
+      - name: Lint templates
+        run: cfn-lint main.yaml templates/*.yaml
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-session-name: gha-deploy-${{ github.run_id }}
+
+      # Uploads every nested template to S3 and rewrites main.yaml's TemplateURL
+      # values to point at the uploaded copies. Objects are content-addressed,
+      # so unchanged templates cost nothing.
+      - name: Package nested templates
+        run: |
+          set -euo pipefail
+          aws cloudformation package \
+            --template-file "$TEMPLATE" \
+            --s3-bucket "${{ secrets.CFN_TEMPLATE_BUCKET }}" \
+            --s3-prefix "${STACK_NAME}/$(date +%Y/%m)" \
+            --output-template-file packaged.yaml
+          echo "Packaged $(grep -c 'TemplateURL' packaged.yaml) nested templates"
+
+      - name: Validate the packaged template
+        run: aws cloudformation validate-template --template-body file://packaged.yaml >/dev/null
+
+      # The change set is created first so the log shows exactly what will
+      # happen before anything is applied - and so a plan-only run can stop here.
+      - name: Create change set
+        id: changeset
+        run: |
+          set -euo pipefail
+          name="gha-${{ github.run_id }}-${{ github.run_attempt }}"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+          type=UPDATE
+          if ! aws cloudformation describe-stacks --stack-name "$STACK_NAME" >/dev/null 2>&1; then
+            type=CREATE
+          fi
+          echo "type=$type" >> "$GITHUB_OUTPUT"
+
+          aws cloudformation create-change-set \
+            --stack-name "$STACK_NAME" \
+            --change-set-name "$name" \
+            --change-set-type "$type" \
+            --template-body file://packaged.yaml \
+            --capabilities CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND \
+            --role-arn "${{ secrets.AWS_STACK_ROLE_ARN }}" \
+            --tags Key=Project,Value=todo-app Key=Environment,Value=dev \
+                   Key=Component,Value=platform Key=ManagedBy,Value=github-actions \
+                   Key=Owner,Value=ivan-muhumuza
+
+          # A change set with nothing in it fails to CREATE_COMPLETE. That is a
+          # successful no-op deploy, not an error.
+          if aws cloudformation wait change-set-create-complete \
+               --stack-name "$STACK_NAME" --change-set-name "$name" 2>/dev/null; then
+            echo "empty=false" >> "$GITHUB_OUTPUT"
+          else
+            reason=$(aws cloudformation describe-change-set \
+              --stack-name "$STACK_NAME" --change-set-name "$name" \
+              --query StatusReason --output text)
+            case "$reason" in
+              *"didn't contain changes"*|*"No updates"*|*"submitted information"*)
+                echo "No changes to apply."
+                echo "empty=true" >> "$GITHUB_OUTPUT" ;;
+              *)
+                echo "::error::change set failed: $reason"; exit 1 ;;
+            esac
+          fi
+
+      - name: Show planned changes
+        if: steps.changeset.outputs.empty == 'false'
+        run: |
+          aws cloudformation describe-change-set \
+            --stack-name "$STACK_NAME" --change-set-name "${{ steps.changeset.outputs.name }}" \
+            --query 'Changes[].ResourceChange.{Action:Action,Resource:LogicalResourceId,Type:ResourceType,Replace:Replacement}' \
+            --output table | tee changes.txt
+          { echo '### Planned changes'; echo '```'; cat changes.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Discard change set (plan only)
+        if: inputs.confirm_plan_only && steps.changeset.outputs.empty == 'false'
+        run: |
+          aws cloudformation delete-change-set \
+            --stack-name "$STACK_NAME" --change-set-name "${{ steps.changeset.outputs.name }}"
+          echo "Plan-only run: change set discarded, nothing applied."
+
+      - name: Execute change set
+        if: ${{ !inputs.confirm_plan_only && steps.changeset.outputs.empty == 'false' }}
+        run: |
+          set -euo pipefail
+          aws cloudformation execute-change-set \
+            --stack-name "$STACK_NAME" --change-set-name "${{ steps.changeset.outputs.name }}"
+
+          if [ "${{ steps.changeset.outputs.type }}" = "CREATE" ]; then
+            aws cloudformation wait stack-create-complete --stack-name "$STACK_NAME"
+          else
+            aws cloudformation wait stack-update-complete --stack-name "$STACK_NAME"
+          fi
+
+      # On failure the events say why; the wait above only says that it failed.
+      - name: Failure detail
+        if: failure()
+        run: |
+          aws cloudformation describe-stack-events --stack-name "$STACK_NAME" \
+            --query 'StackEvents[?contains(ResourceStatus,`FAILED`)].[Timestamp,LogicalResourceId,ResourceStatusReason]' \
+            --output table | head -40 || true
+
+      - name: Outputs
+        if: success()
+        run: |
+          {
+            echo "### Stack outputs"
+            echo ''
+            aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+              --query 'Stacks[0].Outputs[].[OutputKey,OutputValue]' --output table
+          } >> "$GITHUB_STEP_SUMMARY"

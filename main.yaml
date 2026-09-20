@@ -1,0 +1,200 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Entry point for the To-Do application. Everything under templates/ is a
+  nested stack of this one, so the whole environment is a single stack with a
+  single set of parameters, created and updated by
+  .github/workflows/deploy.yml.
+
+  Children are referenced by path relative to this file. `aws cloudformation
+  package` uploads each one to S3 and rewrites these TemplateURL values before
+  the deploy, which is why the paths below are local.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: todo-app
+    Description: Prefix for resource names and cross-stack exports.
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+
+  # ------------------------------------------------------------------ GitHub
+  GitHubOrg:
+    Type: String
+    Default: muhumuza-ivan
+    Description: Organisation or user that owns both repositories.
+  GitHubAppRepo:
+    Type: String
+    Default: todo-elasticache-app
+    Description: Repository holding the application code and Dockerfile.
+  GitHubAppBranch:
+    Type: String
+    Default: main
+  AppRepositoryId:
+    Type: String
+    Default: muhumuza-ivan/todo-elasticache-app
+    Description: owner/repo consumed by the CodePipeline source action.
+  CreateOidcProvider:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      'false' because this account already holds a provider for
+      token.actions.githubusercontent.com and IAM permits one per issuer URL.
+  ExistingOidcProviderArn:
+    Type: String
+    Default: arn:aws:iam::765812221756:oidc-provider/token.actions.githubusercontent.com
+
+  # ------------------------------------------------------------------- Wiring
+  ConnectionArn:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /todo-app/dev/codeconnections/arn
+    Description: >-
+      Written by the bootstrap stack. Resolved here, at the root, and passed
+      down as a plain string - the children never look it up themselves.
+  EcrRepositoryName:
+    Type: String
+    Default: todo-app
+  S3PrefixListId:
+    Type: String
+    Default: pl-6da54004
+    Description: >-
+      Region specific. eu-west-1 is pl-6da54004; look yours up with
+      aws ec2 describe-managed-prefix-lists.
+
+  # -------------------------------------------------------------- Sizing knobs
+  VpcCidr:
+    Type: String
+    Default: 10.20.0.0/16
+  DbInstanceClass:
+    Type: String
+    Default: db.t3.micro
+  MultiAz:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+  CacheNodeType:
+    Type: String
+    Default: cache.t4g.micro
+  NumCacheNodes:
+    Type: Number
+    Default: 2
+  DesiredCount:
+    Type: Number
+    Default: 1
+  MinCapacity:
+    Type: Number
+    Default: 1
+  MaxCapacity:
+    Type: Number
+    Default: 4
+
+Resources:
+  # Order is enforced with DependsOn because the children still wire themselves
+  # together with Export/ImportValue. Where a value can be handed over directly
+  # it is, via GetAtt on the child's Outputs - that also creates the dependency
+  # implicitly, which is why EcrStack needs no DependsOn anywhere.
+
+  EcrStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./templates/ecr.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        Environment: !Ref Environment
+        RepositoryName: !Ref EcrRepositoryName
+
+  OidcStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./templates/github-oidc.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        Environment: !Ref Environment
+        GitHubOrg: !Ref GitHubOrg
+        GitHubAppRepo: !Ref GitHubAppRepo
+        GitHubAppBranch: !Ref GitHubAppBranch
+        EcrRepositoryName: !Ref EcrRepositoryName
+        CreateOidcProvider: !Ref CreateOidcProvider
+        ExistingOidcProviderArn: !Ref ExistingOidcProviderArn
+
+  NetworkStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./templates/network.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        Environment: !Ref Environment
+        VpcCidr: !Ref VpcCidr
+
+  SecurityStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: NetworkStack
+    Properties:
+      TemplateURL: ./templates/security.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        Environment: !Ref Environment
+        S3PrefixListId: !Ref S3PrefixListId
+
+  DataStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: SecurityStack
+    Properties:
+      TemplateURL: ./templates/data.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        Environment: !Ref Environment
+        DbInstanceClass: !Ref DbInstanceClass
+        MultiAz: !Ref MultiAz
+
+  CacheStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: SecurityStack
+    Properties:
+      TemplateURL: ./templates/cache.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        Environment: !Ref Environment
+        CacheNodeType: !Ref CacheNodeType
+        NumCacheNodes: !Ref NumCacheNodes
+
+  AppStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: [DataStack, CacheStack]
+    Properties:
+      TemplateURL: ./templates/app.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        Environment: !Ref Environment
+        DesiredCount: !Ref DesiredCount
+        MinCapacity: !Ref MinCapacity
+        MaxCapacity: !Ref MaxCapacity
+        ImageRepositoryUri: !GetAtt EcrStack.Outputs.RepositoryUri
+
+  PipelineStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: AppStack
+    Properties:
+      TemplateURL: ./templates/pipeline.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        Environment: !Ref Environment
+        ConnectionArn: !Ref ConnectionArn
+        EcrRepositoryName: !GetAtt EcrStack.Outputs.RepositoryName
+        AppRepositoryId: !Ref AppRepositoryId
+        AppBranch: !Ref GitHubAppBranch
+
+Outputs:
+  ApplicationUrl:
+    Description: Public ALB endpoint.
+    Value: !GetAtt AppStack.Outputs.AlbDnsName
+  EcrRepositoryUri:
+    Description: Registry the application workflow pushes to.
+    Value: !GetAtt EcrStack.Outputs.RepositoryUri
+  GitHubActionsRoleArn:
+    Description: Value for AWS_ROLE_ARN in the application repository.
+    Value: !GetAtt OidcStack.Outputs.GitHubActionsRoleArn
+  PipelineName:
+    Value: !GetAtt PipelineStack.Outputs.PipelineName

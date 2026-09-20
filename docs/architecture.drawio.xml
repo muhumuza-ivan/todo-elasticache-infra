@@ -1,0 +1,301 @@
+<mxfile host="app.diagrams.net" agent="todo-elasticache" version="24.7.17" type="device">
+  <diagram id="todo-elasticache-arch" name="todo-app-dev architecture">
+    <mxGraphModel dx="1800" dy="1100" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2000" pageHeight="1400" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" value="todo-app-dev  —  ECS Fargate, RDS Proxy and ElastiCache for Redis in eu-west-1" style="text;html=1;align=left;verticalAlign=middle;fontSize=18;fontStyle=1;fontColor=#232F3E;" vertex="1" parent="1">
+          <mxGeometry x="270" y="8" width="950" height="32" as="geometry" />
+        </mxCell>
+
+        <!-- OUTSIDE AWS -->
+        <mxCell id="ghbox" value="GitHub" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F7F7F7;strokeColor=#6C6C6C;verticalAlign=top;align=left;spacingLeft=12;fontSize=13;fontStyle=1;fontColor=#232F3E;dashed=0;" vertex="1" parent="1">
+          <mxGeometry x="20" y="60" width="210" height="225" as="geometry" />
+        </mxCell>
+        <mxCell id="ghapp" value="todo-elasticache-app" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#6C6C6C;fontSize=10;align=center;" vertex="1" parent="1">
+          <mxGeometry x="35" y="98" width="180" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="ghinfra" value="todo-elasticache-infra" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#6C6C6C;fontSize=10;align=center;" vertex="1" parent="1">
+          <mxGeometry x="35" y="136" width="180" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="ghabuild" value="Actions: build-and-push" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8EAF6;strokeColor=#3334B9;fontSize=10;align=center;fontColor=#232F3E;" vertex="1" parent="1">
+          <mxGeometry x="35" y="191" width="180" height="38" as="geometry" />
+        </mxCell>
+        <mxCell id="ghadeploy" value="Actions: deploy" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8EAF6;strokeColor=#3334B9;fontSize=10;align=center;fontColor=#232F3E;" vertex="1" parent="1">
+          <mxGeometry x="35" y="239" width="180" height="38" as="geometry" />
+        </mxCell>
+
+        <mxCell id="users" value="Users" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#232F3E;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.users;" vertex="1" parent="1">
+          <mxGeometry x="75" y="330" width="70" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- LEGEND -->
+        <mxCell id="legendbox" value="Legend and key decisions" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#232F3E;verticalAlign=top;align=left;spacingLeft=12;fontSize=12;fontStyle=1;fontColor=#232F3E;" vertex="1" parent="1">
+          <mxGeometry x="20" y="450" width="230" height="600" as="geometry" />
+        </mxCell>
+        <mxCell id="legendtext" value="Release path (numbered)&#10;1  image pushed to ECR as :latest&#10;2  EventBridge starts CodePipeline&#10;3  CodeDeploy reads taskdef + appspec&#10;4  blue/green cutover on the ALB&#10;&#10;Application Load Balancer&#10;internet-facing, one node per AZ&#10;:80 production listener&#10;:8080 test listener&#10;blue and green target groups&#10;&#10;Five subnet tiers, two AZs&#10;ALB, ECS, cache, RDS Proxy, RDS.&#10;Each tier has its own subnets and&#10;its own security group, so a&#10;compromise in one tier cannot&#10;reach another except on the single&#10;port that tier is allowed to use.&#10;&#10;No NAT gateway&#10;Private subnets have no default&#10;route. AWS APIs are reached over&#10;six interface endpoints, and S3&#10;(ECR layers) over a gateway&#10;endpoint.&#10;&#10;Credentials&#10;RDS generates and rotates the&#10;master password in Secrets&#10;Manager every 7 days. No password&#10;appears in a template, a change&#10;set or a task definition.&#10;&#10;Auto scaling&#10;1 to 4 tasks, CPU target 60%.&#10;&#10;Line styles&#10;solid  = request path&#10;dashed = replication or control" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontSize=10;fontColor=#232F3E;spacingLeft=4;" vertex="1" parent="1">
+          <mxGeometry x="32" y="476" width="208" height="566" as="geometry" />
+        </mxCell>
+
+        <!-- AWS CLOUD -->
+        <mxCell id="cloud" value="AWS Cloud&#10;Account 765812221756" style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=12;fontStyle=0;container=0;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_aws_cloud_alt;strokeColor=#232F3E;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#232F3E;dashed=0;" vertex="1" parent="1">
+          <mxGeometry x="270" y="50" width="1690" height="1270" as="geometry" />
+        </mxCell>
+        <mxCell id="region" value="Region  eu-west-1" style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=12;fontStyle=0;container=0;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_region;strokeColor=#00A4A6;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#147EBA;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="300" y="100" width="1630" height="1200" as="geometry" />
+        </mxCell>
+
+        <!-- BUILD AND RELEASE BAND -->
+        <mxCell id="cicdband" value="Build and release  ·  outside the VPC" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#AAB7B8;dashed=1;verticalAlign=top;align=left;spacingLeft=10;fontSize=11;fontColor=#879196;" vertex="1" parent="1">
+          <mxGeometry x="330" y="145" width="900" height="130" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ecr" value="Amazon ECR&#10;todo-app" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#ED7100;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ecr;" vertex="1" parent="1">
+          <mxGeometry x="365" y="180" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="eventbridge" value="EventBridge&#10;PUSH of :latest" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#E7157B;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.eventbridge;" vertex="1" parent="1">
+          <mxGeometry x="505" y="180" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="codepipeline" value="CodePipeline&#10;source via CodeConnections" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#3334B9;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.codepipeline;" vertex="1" parent="1">
+          <mxGeometry x="645" y="180" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="codedeploy" value="CodeDeploy&#10;ECS blue/green" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#3334B9;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.codedeploy;" vertex="1" parent="1">
+          <mxGeometry x="785" y="180" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="cfn" value="CloudFormation&#10;1 root + 8 nested stacks" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#E7157B;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudformation;" vertex="1" parent="1">
+          <mxGeometry x="985" y="180" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="iam" value="IAM&#10;GitHub OIDC roles&#10;no stored keys" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#DD344C;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.identity_and_access_management;" vertex="1" parent="1">
+          <mxGeometry x="1125" y="180" width="60" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- SHARED SERVICES -->
+        <mxCell id="sharedbox" value="Shared services&#10;reached only through the VPC endpoints" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#AAB7B8;dashed=1;verticalAlign=top;align=left;spacingLeft=10;fontSize=11;fontColor=#879196;" vertex="1" parent="1">
+          <mxGeometry x="1660" y="420" width="250" height="590" as="geometry" />
+        </mxCell>
+        <mxCell id="secrets" value="Secrets Manager&#10;RDS-managed password" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#DD344C;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.secrets_manager;" vertex="1" parent="1">
+          <mxGeometry x="1700" y="470" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="ssm" value="SSM Parameter Store&#10;/todo-app/dev/*" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#E7157B;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.systems_manager;" vertex="1" parent="1">
+          <mxGeometry x="1700" y="580" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="cwlogs" value="CloudWatch Logs + alarms&#10;/ecs/todo-app-dev" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#E7157B;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudwatch_2;" vertex="1" parent="1">
+          <mxGeometry x="1700" y="690" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="s3art" value="Amazon S3&#10;pipeline artifacts&#10;packaged templates" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#7AA116;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;" vertex="1" parent="1">
+          <mxGeometry x="1700" y="800" width="60" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- VPC -->
+        <mxCell id="vpc" value="VPC  10.20.0.0/16   ·   no NAT gateway" style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=12;fontStyle=0;container=0;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_vpc2;strokeColor=#8C4FFF;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#8C4FFF;dashed=0;" vertex="1" parent="1">
+          <mxGeometry x="330" y="320" width="1290" height="940" as="geometry" />
+        </mxCell>
+        <mxCell id="igw" value="Internet Gateway" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#8C4FFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.internet_gateway;" vertex="1" parent="1">
+          <mxGeometry x="365" y="330" width="70" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- AZ A -->
+        <mxCell id="aza" value="Availability Zone  eu-west-1a" style="fillColor=none;strokeColor=#147EBA;dashed=1;verticalAlign=top;fontStyle=0;fontColor=#147EBA;whiteSpace=wrap;html=1;align=left;spacingLeft=12;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="410" y="425" width="570" height="695" as="geometry" />
+        </mxCell>
+        <mxCell id="pub-a" value="Public subnet  10.20.0.0/24" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E9F3E6;strokeColor=#248814;dashed=0;verticalAlign=top;align=left;spacingLeft=10;fontSize=10;fontColor=#248814;" vertex="1" parent="1">
+          <mxGeometry x="440" y="455" width="510" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="alb-a" value="ALB node&#10;sg: alb-sg" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#8C4FFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.elastic_load_balancing;" vertex="1" parent="1">
+          <mxGeometry x="475" y="478" width="56" height="56" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ecs-a" value="ECS task subnet  10.20.10.0/24" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6F2F8;strokeColor=#147EBA;dashed=0;verticalAlign=top;align=left;spacingLeft=10;fontSize=10;fontColor=#147EBA;" vertex="1" parent="1">
+          <mxGeometry x="440" y="580" width="510" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="task-a" value="Fargate task&#10;todo-app :8080&#10;sg: ecs-sg" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#ED7100;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.fargate;" vertex="1" parent="1">
+          <mxGeometry x="475" y="608" width="56" height="56" as="geometry" />
+        </mxCell>
+
+        <mxCell id="cache-a" value="ElastiCache subnet  10.20.40.0/24" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6F2F8;strokeColor=#147EBA;dashed=0;verticalAlign=top;align=left;spacingLeft=10;fontSize=10;fontColor=#147EBA;" vertex="1" parent="1">
+          <mxGeometry x="440" y="740" width="510" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="redis-a" value="Redis 7.1  PRIMARY&#10;cache.t4g.micro&#10;sg: cache-sg" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#C925D1;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.elasticache;" vertex="1" parent="1">
+          <mxGeometry x="475" y="763" width="56" height="56" as="geometry" />
+        </mxCell>
+
+        <mxCell id="proxy-a" value="RDS Proxy subnet  10.20.30.0/24" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6F2F8;strokeColor=#147EBA;dashed=0;verticalAlign=top;align=left;spacingLeft=10;fontSize=10;fontColor=#147EBA;" vertex="1" parent="1">
+          <mxGeometry x="440" y="865" width="510" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="rdsproxy-a" value="RDS Proxy&#10;TLS required&#10;sg: proxy-sg" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#C925D1;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.rds;" vertex="1" parent="1">
+          <mxGeometry x="475" y="888" width="56" height="56" as="geometry" />
+        </mxCell>
+
+        <mxCell id="db-a" value="RDS subnet  10.20.20.0/24" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6F2F8;strokeColor=#147EBA;dashed=0;verticalAlign=top;align=left;spacingLeft=10;fontSize=10;fontColor=#147EBA;" vertex="1" parent="1">
+          <mxGeometry x="440" y="990" width="510" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="rds-a" value="PostgreSQL 16  PRIMARY&#10;db.t3.micro&#10;sg: rds-sg" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#C925D1;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.rds;" vertex="1" parent="1">
+          <mxGeometry x="475" y="1013" width="56" height="56" as="geometry" />
+        </mxCell>
+
+        <!-- AZ B -->
+        <mxCell id="azb" value="Availability Zone  eu-west-1b" style="fillColor=none;strokeColor=#147EBA;dashed=1;verticalAlign=top;fontStyle=0;fontColor=#147EBA;whiteSpace=wrap;html=1;align=left;spacingLeft=12;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1020" y="425" width="570" height="695" as="geometry" />
+        </mxCell>
+        <mxCell id="pub-b" value="Public subnet  10.20.1.0/24" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E9F3E6;strokeColor=#248814;dashed=0;verticalAlign=top;align=left;spacingLeft=10;fontSize=10;fontColor=#248814;" vertex="1" parent="1">
+          <mxGeometry x="1050" y="455" width="510" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="alb-b" value="ALB node&#10;same load balancer" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#8C4FFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.elastic_load_balancing;" vertex="1" parent="1">
+          <mxGeometry x="1085" y="478" width="56" height="56" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ecs-b" value="ECS task subnet  10.20.11.0/24" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6F2F8;strokeColor=#147EBA;dashed=0;verticalAlign=top;align=left;spacingLeft=10;fontSize=10;fontColor=#147EBA;" vertex="1" parent="1">
+          <mxGeometry x="1050" y="580" width="510" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="task-b" value="Fargate task&#10;1 to 4, CPU 60%&#10;sg: ecs-sg" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#ED7100;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.fargate;" vertex="1" parent="1">
+          <mxGeometry x="1085" y="608" width="56" height="56" as="geometry" />
+        </mxCell>
+        <mxCell id="vpce" value="6 interface endpoints, in both ECS subnets&#10;ecr.api · ecr.dkr · logs · ssm · ssmmessages · secretsmanager&#10;plus an S3 gateway endpoint for ECR layers&#10;sg: vpce-sg" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#8C4FFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=9;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.endpoint;" vertex="1" parent="1">
+          <mxGeometry x="1400" y="608" width="56" height="56" as="geometry" />
+        </mxCell>
+
+        <mxCell id="cache-b" value="ElastiCache subnet  10.20.41.0/24" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6F2F8;strokeColor=#147EBA;dashed=0;verticalAlign=top;align=left;spacingLeft=10;fontSize=10;fontColor=#147EBA;" vertex="1" parent="1">
+          <mxGeometry x="1050" y="740" width="510" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="redis-b" value="Redis  REPLICA&#10;automatic failover&#10;TLS in transit" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#C925D1;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.elasticache;" vertex="1" parent="1">
+          <mxGeometry x="1085" y="763" width="56" height="56" as="geometry" />
+        </mxCell>
+
+        <mxCell id="proxy-b" value="RDS Proxy subnet  10.20.31.0/24" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6F2F8;strokeColor=#147EBA;dashed=0;verticalAlign=top;align=left;spacingLeft=10;fontSize=10;fontColor=#147EBA;" vertex="1" parent="1">
+          <mxGeometry x="1050" y="865" width="510" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="rdsproxy-b" value="RDS Proxy&#10;second AZ endpoint" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#C925D1;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.rds;" vertex="1" parent="1">
+          <mxGeometry x="1085" y="888" width="56" height="56" as="geometry" />
+        </mxCell>
+
+        <mxCell id="db-b" value="RDS subnet  10.20.21.0/24" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6F2F8;strokeColor=#147EBA;dashed=0;verticalAlign=top;align=left;spacingLeft=10;fontSize=10;fontColor=#147EBA;" vertex="1" parent="1">
+          <mxGeometry x="1050" y="990" width="510" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="rds-b" value="PostgreSQL  STANDBY&#10;Multi-AZ" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#C925D1;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.rds;" vertex="1" parent="1">
+          <mxGeometry x="1085" y="1013" width="56" height="56" as="geometry" />
+        </mxCell>
+
+        <!-- EDGES : ingress -->
+        <mxCell id="e1" value="HTTP :80" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#232F3E;strokeWidth=2;fontSize=10;endArrow=blockThin;endFill=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="users" target="igw">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#232F3E;strokeWidth=2;endArrow=blockThin;endFill=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="igw" target="alb-a">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="400" y="418" /><mxPoint x="503" y="418" /></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#232F3E;strokeWidth=2;endArrow=blockThin;endFill=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="igw" target="alb-b">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="1113" y="365" /></Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- EDGES : request path inside the VPC -->
+        <mxCell id="e4" value=":8080" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#8C4FFF;strokeWidth=2;fontSize=10;endArrow=blockThin;endFill=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="alb-a" target="task-a">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" value=":8080" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#8C4FFF;strokeWidth=2;fontSize=10;endArrow=blockThin;endFill=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="alb-b" target="task-b">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e6" value="read :6379 TLS&#10;cache-aside, 60s TTL" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#1D8102;strokeWidth=2;fontSize=10;endArrow=blockThin;endFill=1;exitX=0.3;exitY=1;exitDx=0;exitDy=0;entryX=0.3;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="task-a" target="redis-a">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" value="read :6379 TLS" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#1D8102;strokeWidth=2;fontSize=10;endArrow=blockThin;endFill=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="task-b" target="redis-b">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e8" value="write :5432 TLS" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#C925D1;strokeWidth=2;fontSize=10;endArrow=blockThin;endFill=1;exitX=0.7;exitY=1;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="task-a" target="rdsproxy-a">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="514" y="730" /><mxPoint x="965" y="730" /><mxPoint x="965" y="916" /></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e9" value="write :5432 TLS" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#C925D1;strokeWidth=2;fontSize=10;endArrow=blockThin;endFill=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="task-b" target="rdsproxy-b">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="1035" y="636" /><mxPoint x="1035" y="916" /></Array>
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="e10" value=":5432" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#C925D1;strokeWidth=2;fontSize=10;endArrow=blockThin;endFill=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="rdsproxy-a" target="rds-a">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" value="on failover" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#C925D1;strokeWidth=2;dashed=1;fontSize=10;endArrow=blockThin;endFill=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="rdsproxy-b" target="rds-b">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e12" value="synchronous replication" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#C925D1;strokeWidth=2;dashed=1;fontSize=10;endArrow=blockThin;endFill=1;startArrow=blockThin;startFill=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="rds-a" target="rds-b">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e13" value="replication" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#C925D1;strokeWidth=2;dashed=1;fontSize=10;endArrow=blockThin;endFill=1;startArrow=blockThin;startFill=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="redis-a" target="redis-b">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- EDGES : egress to AWS APIs -->
+        <mxCell id="e14" value=":443" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#8C4FFF;strokeWidth=2;fontSize=10;endArrow=blockThin;endFill=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="task-b" target="vpce">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e15" value="image pull · secrets · parameters · logs" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#879196;strokeWidth=2;dashed=1;fontSize=10;endArrow=blockThin;endFill=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.366;entryDx=0;entryDy=0;" edge="1" parent="1" source="vpce" target="sharedbox">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- EDGES : release path -->
+        <mxCell id="e16" value="OIDC · push :sha then :latest" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#3334B9;strokeWidth=2;fontSize=10;endArrow=blockThin;endFill=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="ghabuild" target="ecr">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e17" value="OIDC · package + change set" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#3334B9;strokeWidth=2;fontSize=10;endArrow=blockThin;endFill=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="ghadeploy" target="cfn">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="260" y="258" /><mxPoint x="260" y="122" /><mxPoint x="1015" y="122" /></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e18" value="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#E7157B;strokeWidth=2;fontSize=12;fontStyle=1;endArrow=blockThin;endFill=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="ecr" target="eventbridge">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e19" value="2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#E7157B;strokeWidth=2;fontSize=12;fontStyle=1;endArrow=blockThin;endFill=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="eventbridge" target="codepipeline">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e20" value="3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#3334B9;strokeWidth=2;fontSize=12;fontStyle=1;endArrow=blockThin;endFill=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="codepipeline" target="codedeploy">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e21" value="4  shift traffic blue to green" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#3334B9;strokeWidth=2;dashed=1;fontSize=10;endArrow=blockThin;endFill=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=1;entryY=0.6;entryDx=0;entryDy=0;" edge="1" parent="1" source="codedeploy" target="ecs-b">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="815" y="300" /><mxPoint x="1645" y="300" /><mxPoint x="1645" y="664" /></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="vpcstrip" value="VPC-level resources  ·  attached to route tables, not to a subnet" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#8C4FFF;dashed=1;verticalAlign=top;align=left;spacingLeft=10;fontSize=10;fontColor=#8C4FFF;" vertex="1" parent="1">
+          <mxGeometry x="410" y="1145" width="1180" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="rtb" value="5 route tables&#10;only the public tier has 0.0.0.0/0" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#8C4FFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=9;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.route_table;" vertex="1" parent="1">
+          <mxGeometry x="450" y="1158" width="44" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="s3gw" value="S3 gateway endpoint&#10;ECR image layers" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#8C4FFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=9;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.endpoint;" vertex="1" parent="1">
+          <mxGeometry x="700" y="1158" width="44" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="flowlogs" value="VPC Flow Logs&#10;14 day retention" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#8C4FFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=9;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.flow_logs;" vertex="1" parent="1">
+          <mxGeometry x="950" y="1158" width="44" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="strip-note" value="No NAT gateway anywhere. The four private tiers have no&#10;default route at all, so the only way out is the endpoints&#10;above and the six interface endpoints in the ECS subnets." style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontSize=9;fontColor=#232F3E;" vertex="1" parent="1">
+          <mxGeometry x="1120" y="1170" width="450" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="lsn-a" value="Production listener :80&#10;forwards to the BLUE target group" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#8C4FFF;fontSize=9;align=center;fontColor=#232F3E;" vertex="1" parent="1">
+          <mxGeometry x="620" y="478" width="300" height="54" as="geometry" />
+        </mxCell>
+        <mxCell id="lsn-b" value="Test listener :8080&#10;forwards to the GREEN target group" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#8C4FFF;fontSize=9;align=center;fontColor=#232F3E;" vertex="1" parent="1">
+          <mxGeometry x="1230" y="478" width="300" height="54" as="geometry" />
+        </mxCell>
+        <mxCell id="ecscluster" value="ECS cluster + service&#10;todo-app-dev  (Fargate)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#ED7100;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=9;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ecs;" vertex="1" parent="1">
+          <mxGeometry x="660" y="608" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="autoscale" value="Application Auto Scaling&#10;1 to 4 tasks, CPU 60%" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#ED7100;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=9;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.application_auto_scaling;" vertex="1" parent="1">
+          <mxGeometry x="830" y="608" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="alarms" value="CloudWatch alarms&#10;ALB 5xx + unhealthy hosts&#10;trip the CodeDeploy rollback" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#E7157B;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=9;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.alarm;" vertex="1" parent="1">
+          <mxGeometry x="1700" y="910" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="e22" value="S3 prefix list route" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#8C4FFF;strokeWidth=2;dashed=1;fontSize=9;endArrow=blockThin;endFill=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="rtb" target="s3gw">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

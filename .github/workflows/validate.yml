@@ -1,0 +1,63 @@
+name: Validate templates
+
+on:
+  pull_request:
+    branches: [main, bootstrap]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: cfn-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install cfn-lint
+        run: pip install --disable-pip-version-check cfn-lint==1.22.3
+
+      # Reads .cfnlintrc.yaml, which suppresses W3002 - main.yaml uses local
+      # TemplateURL paths on purpose, for `aws cloudformation package`.
+      - name: Lint CloudFormation templates
+        run: cfn-lint main.yaml bootstrap.yaml templates/*.yaml
+
+      # cfn-lint checks each file in isolation, so it cannot see that main.yaml
+      # passes a parameter a child does not declare. This does.
+      - name: Check main.yaml wires the children correctly
+        shell: bash
+        run: |
+          python - <<'PY'
+          import sys, yaml, os
+          class L(yaml.SafeLoader): pass
+          L.add_multi_constructor('!', lambda ld, suf, n:
+              {'GetAtt': n.value if isinstance(n.value, str) else None} if suf == 'GetAtt' else None)
+
+          main = yaml.load(open('main.yaml'), Loader=L)
+          status = 0
+          for name, res in (main.get('Resources') or {}).items():
+              if res.get('Type') != 'AWS::CloudFormation::Stack':
+                  continue
+              url = res['Properties']['TemplateURL']
+              path = os.path.normpath(url)   # relative to main.yaml, at the repo root
+              if not os.path.isfile(path):
+                  print(f'::error::{name}: TemplateURL {url} does not exist'); status = 1; continue
+              child = yaml.load(open(path), Loader=L)
+              declared = set((child.get('Parameters') or {}).keys())
+              passed = set((res['Properties'].get('Parameters') or {}).keys())
+              unknown = passed - declared
+              required = {k for k, v in (child.get('Parameters') or {}).items() if 'Default' not in v}
+              missing = required - passed
+              if unknown:
+                  print(f'::error::{name}: passes parameters {sorted(unknown)} that {path} does not declare'); status = 1
+              if missing:
+                  print(f'::error::{name}: {path} requires {sorted(missing)} but main.yaml does not pass them'); status = 1
+              if not unknown and not missing:
+                  print(f'ok: {name} -> {path} ({len(passed)} parameters)')
+          sys.exit(status)
+          PY
