@@ -31,6 +31,17 @@ Parameters:
   GitHubAppBranch:
     Type: String
     Default: main
+  # Supplied by the deploy workflow, which reads the owner ID from the Actions
+  # context and looks the application repository ID up from the GitHub API.
+  # Deliberately without defaults - see bootstrap.yaml for the reasoning.
+  GitHubOrgId:
+    Type: String
+    Description: Numeric owner ID, part of the immutable OIDC subject claim.
+    AllowedPattern: ^[0-9]{1,20}$
+  GitHubAppRepoId:
+    Type: String
+    Description: Numeric repository ID of the application repository.
+    AllowedPattern: ^[0-9]{1,20}$
   AppRepositoryId:
     Type: String
     Default: muhumuza-ivan/todo-elasticache-app
@@ -115,6 +126,8 @@ Resources:
         GitHubOrg: !Ref GitHubOrg
         GitHubAppRepo: !Ref GitHubAppRepo
         GitHubAppBranch: !Ref GitHubAppBranch
+        GitHubOrgId: !Ref GitHubOrgId
+        GitHubAppRepoId: !Ref GitHubAppRepoId
         EcrRepositoryName: !Ref EcrRepositoryName
         CreateOidcProvider: !Ref CreateOidcProvider
         ExistingOidcProviderArn: !Ref ExistingOidcProviderArn

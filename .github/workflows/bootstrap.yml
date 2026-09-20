@@ -89,6 +89,9 @@ jobs:
             --template-body "file://$TEMPLATE" \
             --capabilities CAPABILITY_NAMED_IAM \
             --role-arn "${{ secrets.AWS_STACK_ROLE_ARN }}" \
+            --parameters \
+              ParameterKey=GitHubOrgId,ParameterValue=${{ github.repository_owner_id }} \
+              ParameterKey=GitHubInfraRepoId,ParameterValue=${{ github.repository_id }} \
             --tags Key=Project,Value=todo-app Key=Environment,Value=dev \
                    Key=Component,Value=cicd Key=ManagedBy,Value=github-actions \
                    Key=Owner,Value=ivan-muhumuza

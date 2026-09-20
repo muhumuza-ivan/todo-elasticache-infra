@@ -50,6 +50,25 @@ Parameters:
       the deployment machinery is never mixed into an application deploy, and
       so the blast radius of each branch is obvious.
     AllowedPattern: ^[A-Za-z0-9._/-]{1,255}$
+  # No defaults on the two IDs below. They are account and repository specific,
+  # so a default would be a number that is silently wrong everywhere except
+  # here. The workflow reads both from the GitHub Actions context and passes
+  # them in; a console operator is prompted and can fetch them with the
+  # commands in each description.
+  GitHubOrgId:
+    Type: String
+    Description: >-
+      Numeric owner ID. GitHub issues immutable subject claims that embed the
+      owner and repository IDs, so renaming cannot carry access over.
+      Get it with: gh api users/<org> --jq .id
+    AllowedPattern: ^[0-9]{1,20}$
+  GitHubInfraRepoId:
+    Type: String
+    Description: >-
+      Numeric repository ID of the infrastructure repository.
+      Get it with: gh api repos/<org>/<repo> --jq .id
+    AllowedPattern: ^[0-9]{1,20}$
+
   OidcProviderArn:
     Type: String
     Default: arn:aws:iam::765812221756:oidc-provider/token.actions.githubusercontent.com
@@ -186,10 +205,20 @@ Resources:
             # Two branches of one repository, and nothing else: main deploys
             # the environment, bootstrap deploys this stack. A run on any other
             # branch, or in any other repository, cannot assume this role.
+            #
+            # Both subject formats are listed. GitHub issues an IMMUTABLE
+            # subject that embeds the owner and repository IDs
+            # (repo:<org>@<ownerId>/<repo>@<repoId>:ref:...) when
+            # use_immutable_subject is on, which it is for these repositories;
+            # the plain form is kept so the role still works if that is ever
+            # turned off. Check which one you get with:
+            #   gh api repos/<org>/<repo>/actions/oidc/customization/sub
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
                 token.actions.githubusercontent.com:sub:
+                  - !Sub 'repo:${GitHubOrg}@${GitHubOrgId}/${GitHubInfraRepo}@${GitHubInfraRepoId}:ref:refs/heads/${GitHubInfraBranch}'
+                  - !Sub 'repo:${GitHubOrg}@${GitHubOrgId}/${GitHubInfraRepo}@${GitHubInfraRepoId}:ref:refs/heads/${GitHubBootstrapBranch}'
                   - !Sub 'repo:${GitHubOrg}/${GitHubInfraRepo}:ref:refs/heads/${GitHubInfraBranch}'
                   - !Sub 'repo:${GitHubOrg}/${GitHubInfraRepo}:ref:refs/heads/${GitHubBootstrapBranch}'
       Policies:

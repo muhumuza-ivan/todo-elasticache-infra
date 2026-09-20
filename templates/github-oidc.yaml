@@ -31,6 +31,21 @@ Parameters:
       the role. Tag and pull_request runs are deliberately excluded.
     AllowedPattern: ^[A-Za-z0-9._/-]{1,255}$
 
+  # No defaults: these are account and repository specific. The root stack
+  # passes them down, and the deploy workflow resolves them at run time.
+  GitHubOrgId:
+    Type: String
+    Description: >-
+      Numeric owner ID, part of the immutable OIDC subject claim.
+      Get it with: gh api users/<org> --jq .id
+    AllowedPattern: ^[0-9]{1,20}$
+  GitHubAppRepoId:
+    Type: String
+    Description: >-
+      Numeric repository ID of the application repository.
+      Get it with: gh api repos/<org>/<repo> --jq .id
+    AllowedPattern: ^[0-9]{1,20}$
+
   EcrRepositoryName:
     Type: String
     Default: todo-app
@@ -108,10 +123,17 @@ Resources:
                 - !GetAtt GitHubOidcProvider.Arn
                 - !Ref ExistingOidcProviderArn
             Action: sts:AssumeRoleWithWebIdentity
+            # Both subject formats. GitHub issues an IMMUTABLE subject that
+            # embeds the owner and repository IDs when use_immutable_subject is
+            # on, which it is for this repository; the plain form is kept in
+            # case that is ever turned off. Check with:
+            #   gh api repos/<org>/<repo>/actions/oidc/customization/sub
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOrg}/${GitHubAppRepo}:ref:refs/heads/${GitHubAppBranch}'
+                token.actions.githubusercontent.com:sub:
+                  - !Sub 'repo:${GitHubOrg}@${GitHubOrgId}/${GitHubAppRepo}@${GitHubAppRepoId}:ref:refs/heads/${GitHubAppBranch}'
+                  - !Sub 'repo:${GitHubOrg}/${GitHubAppRepo}:ref:refs/heads/${GitHubAppBranch}'
       Policies:
         - PolicyName: ecr-login
           PolicyDocument:
@@ -165,5 +187,8 @@ Outputs:
     Export:
       Name: !Sub '${ProjectName}-${Environment}-GitHubActionsRoleArn'
   TrustedSubject:
-    Description: The single GitHub OIDC subject claim allowed to assume the role.
-    Value: !Sub 'repo:${GitHubOrg}/${GitHubAppRepo}:ref:refs/heads/${GitHubAppBranch}'
+    Description: >-
+      The immutable GitHub OIDC subject claim allowed to assume the role. This
+      is the value the workflow actually presents; the plain form is also
+      accepted.
+    Value: !Sub 'repo:${GitHubOrg}@${GitHubOrgId}/${GitHubAppRepo}@${GitHubAppRepoId}:ref:refs/heads/${GitHubAppBranch}'
