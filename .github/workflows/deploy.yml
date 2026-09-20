@@ -27,6 +27,7 @@ permissions:
 env:
   STACK_NAME: todo-app-dev
   TEMPLATE: main.yaml
+  APP_REPO: todo-elasticache-app   # must match GitHubAppRepo in main.yaml
 
 jobs:
   deploy:
@@ -70,6 +71,26 @@ jobs:
       - name: Validate the packaged template
         run: aws cloudformation validate-template --template-body file://packaged.yaml >/dev/null
 
+      # GitHub issues an immutable OIDC subject that embeds the owner and
+      # repository IDs rather than their names, so a rename cannot carry AWS
+      # access with it. Those IDs are account specific, so they are resolved
+      # here rather than written into a template. This workflow runs in the
+      # infrastructure repository, so the application repository id is looked
+      # up through the API.
+      - name: Resolve GitHub numeric IDs
+        id: ghids
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          app_repo_id=$(gh api "repos/${{ github.repository_owner }}/${APP_REPO}" --jq .id)
+          if [ -z "$app_repo_id" ]; then
+            echo "::error::could not resolve the numeric id of ${APP_REPO}"; exit 1
+          fi
+          echo "owner_id=${{ github.repository_owner_id }}" >> "$GITHUB_OUTPUT"
+          echo "app_repo_id=$app_repo_id" >> "$GITHUB_OUTPUT"
+          echo "owner id ${{ github.repository_owner_id }}, ${APP_REPO} id $app_repo_id"
+
       # The change set is created first so the log shows exactly what will
       # happen before anything is applied - and so a plan-only run can stop here.
       - name: Create change set
@@ -92,6 +113,9 @@ jobs:
             --template-body file://packaged.yaml \
             --capabilities CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND \
             --role-arn "${{ secrets.AWS_STACK_ROLE_ARN }}" \
+            --parameters \
+              ParameterKey=GitHubOrgId,ParameterValue=${{ steps.ghids.outputs.owner_id }} \
+              ParameterKey=GitHubAppRepoId,ParameterValue=${{ steps.ghids.outputs.app_repo_id }} \
             --tags Key=Project,Value=todo-app Key=Environment,Value=dev \
                    Key=Component,Value=platform Key=ManagedBy,Value=github-actions \
                    Key=Owner,Value=ivan-muhumuza
