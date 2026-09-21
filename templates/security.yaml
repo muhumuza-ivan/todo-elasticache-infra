@@ -1,10 +1,11 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
   Per-tier security groups and the interface VPC endpoints the private tiers need.
-  Every security group declares its egress explicitly; tiers that must not initiate
-  any outbound connection are pinned to 127.0.0.1/32, which is the CloudFormation
-  idiom for "no egress" (omitting SecurityGroupEgress would silently create an
-  allow-all 0.0.0.0/0 rule).
+  Reachability is controlled with ingress rules only. Security groups are stateful,
+  so a reply never needs a matching egress rule, and the private subnets carry no
+  default route, so egress is already bounded by routing to the VPC, the interface
+  endpoints and the S3 gateway endpoint. Each group therefore leaves egress at the
+  default and names exactly who may open a connection to it.
 
 Parameters:
   ProjectName:
@@ -33,14 +34,6 @@ Parameters:
       CIDR allowed to reach the blue/green test listener. Defaults to the VPC CIDR
       so pre-cutover validation is internal only; widen deliberately if you need to
       curl the green task set from outside.
-  S3PrefixListId:
-    Type: String
-    Description: >-
-      AWS-managed prefix list ID for S3 in this Region, used for the ECS egress rule
-      that reaches ECR image layers through the S3 gateway endpoint. Find it with:
-      aws ec2 describe-managed-prefix-lists --region <region>
-      --filters Name=prefix-list-name,Values=com.amazonaws.<region>.s3
-    AllowedPattern: ^pl-[0-9a-f]+$
 
 Resources:
   # ----------------------------------------------------------------- ALB tier
@@ -48,7 +41,7 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupName: !Sub '${ProjectName}-${Environment}-alb-sg'
-      GroupDescription: Public ALB - accepts internet HTTP, talks only to ECS tasks.
+      GroupDescription: Public ALB - accepts internet HTTP and the blue/green test listener.
       VpcId:
         Fn::ImportValue: !Sub '${ProjectName}-${Environment}-VpcId'
       SecurityGroupIngress:
@@ -77,7 +70,7 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupName: !Sub '${ProjectName}-${Environment}-ecs-sg'
-      GroupDescription: Fargate tasks - ingress from ALB only, egress to data tiers and VPC endpoints.
+      GroupDescription: Fargate tasks - ingress from the ALB only.
       VpcId:
         Fn::ImportValue: !Sub '${ProjectName}-${Environment}-VpcId'
       Tags:
@@ -95,7 +88,7 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupName: !Sub '${ProjectName}-${Environment}-rdsproxy-sg'
-      GroupDescription: RDS Proxy - ingress from ECS tasks, egress to the database only.
+      GroupDescription: RDS Proxy - ingress from ECS tasks only.
       VpcId:
         Fn::ImportValue: !Sub '${ProjectName}-${Environment}-VpcId'
       Tags:
@@ -113,13 +106,9 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupName: !Sub '${ProjectName}-${Environment}-rds-sg'
-      GroupDescription: PostgreSQL - ingress from RDS Proxy only, no egress.
+      GroupDescription: PostgreSQL - ingress from RDS Proxy only.
       VpcId:
         Fn::ImportValue: !Sub '${ProjectName}-${Environment}-VpcId'
-      SecurityGroupEgress:
-        - Description: No outbound connections required
-          IpProtocol: '-1'
-          CidrIp: 127.0.0.1/32
       Tags:
         - Key: Name
           Value: !Sub '${ProjectName}-${Environment}-rds-sg'
@@ -135,13 +124,9 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupName: !Sub '${ProjectName}-${Environment}-cache-sg'
-      GroupDescription: ElastiCache for Redis - ingress from ECS tasks only, no egress.
+      GroupDescription: ElastiCache for Redis - ingress from ECS tasks only.
       VpcId:
         Fn::ImportValue: !Sub '${ProjectName}-${Environment}-VpcId'
-      SecurityGroupEgress:
-        - Description: No outbound connections required
-          IpProtocol: '-1'
-          CidrIp: 127.0.0.1/32
       Tags:
         - Key: Name
           Value: !Sub '${ProjectName}-${Environment}-cache-sg'
@@ -157,13 +142,9 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupName: !Sub '${ProjectName}-${Environment}-vpce-sg'
-      GroupDescription: Interface VPC endpoints - HTTPS from ECS tasks only, no egress.
+      GroupDescription: Interface VPC endpoints - HTTPS from ECS tasks only.
       VpcId:
         Fn::ImportValue: !Sub '${ProjectName}-${Environment}-VpcId'
-      SecurityGroupEgress:
-        - Description: No outbound connections required
-          IpProtocol: '-1'
-          CidrIp: 127.0.0.1/32
       Tags:
         - Key: Name
           Value: !Sub '${ProjectName}-${Environment}-vpce-sg'
@@ -176,17 +157,7 @@ Resources:
 
   # ---------------------------------------------------------------- SG rules
   # Declared as standalone resources so groups can reference each other without
-  # a circular dependency.
-  AlbEgressToEcs:
-    Type: AWS::EC2::SecurityGroupEgress
-    Properties:
-      GroupId: !Ref AlbSecurityGroup
-      Description: Forward requests and health checks to Fargate tasks
-      IpProtocol: tcp
-      FromPort: !Ref ContainerPort
-      ToPort: !Ref ContainerPort
-      DestinationSecurityGroupId: !Ref EcsSecurityGroup
-
+  # a circular dependency. Ingress only - see the template description.
   EcsIngressFromAlb:
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
@@ -197,46 +168,6 @@ Resources:
       ToPort: !Ref ContainerPort
       SourceSecurityGroupId: !Ref AlbSecurityGroup
 
-  EcsEgressToProxy:
-    Type: AWS::EC2::SecurityGroupEgress
-    Properties:
-      GroupId: !Ref EcsSecurityGroup
-      Description: PostgreSQL through RDS Proxy
-      IpProtocol: tcp
-      FromPort: 5432
-      ToPort: 5432
-      DestinationSecurityGroupId: !Ref ProxySecurityGroup
-
-  EcsEgressToCache:
-    Type: AWS::EC2::SecurityGroupEgress
-    Properties:
-      GroupId: !Ref EcsSecurityGroup
-      Description: Redis
-      IpProtocol: tcp
-      FromPort: 6379
-      ToPort: 6379
-      DestinationSecurityGroupId: !Ref CacheSecurityGroup
-
-  EcsEgressToVpcEndpoints:
-    Type: AWS::EC2::SecurityGroupEgress
-    Properties:
-      GroupId: !Ref EcsSecurityGroup
-      Description: HTTPS to ECR, CloudWatch Logs, SSM and Secrets Manager endpoints
-      IpProtocol: tcp
-      FromPort: 443
-      ToPort: 443
-      DestinationSecurityGroupId: !Ref VpcEndpointSecurityGroup
-
-  EcsEgressToS3:
-    Type: AWS::EC2::SecurityGroupEgress
-    Properties:
-      GroupId: !Ref EcsSecurityGroup
-      Description: HTTPS to S3 (ECR image layers) via the gateway endpoint
-      IpProtocol: tcp
-      FromPort: 443
-      ToPort: 443
-      DestinationPrefixListId: !Ref S3PrefixListId
-
   ProxyIngressFromEcs:
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
@@ -246,16 +177,6 @@ Resources:
       FromPort: 5432
       ToPort: 5432
       SourceSecurityGroupId: !Ref EcsSecurityGroup
-
-  ProxyEgressToRds:
-    Type: AWS::EC2::SecurityGroupEgress
-    Properties:
-      GroupId: !Ref ProxySecurityGroup
-      Description: PostgreSQL to the RDS instance
-      IpProtocol: tcp
-      FromPort: 5432
-      ToPort: 5432
-      DestinationSecurityGroupId: !Ref RdsSecurityGroup
 
   RdsIngressFromProxy:
     Type: AWS::EC2::SecurityGroupIngress

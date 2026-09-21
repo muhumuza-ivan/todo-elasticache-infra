@@ -61,12 +61,6 @@ Parameters:
   EcrRepositoryName:
     Type: String
     Default: todo-app
-  S3PrefixListId:
-    Type: String
-    Default: pl-6da54004
-    Description: >-
-      Region specific. eu-west-1 is pl-6da54004; look yours up with
-      aws ec2 describe-managed-prefix-lists.
 
   # -------------------------------------------------------------- Sizing knobs
   VpcCidr:
@@ -178,7 +172,6 @@ Resources:
       Parameters:
         ProjectName: !Ref ProjectName
         Environment: !Ref Environment
-        S3PrefixListId: !Ref S3PrefixListId
 
   DataStack:
     Type: AWS::CloudFormation::Stack

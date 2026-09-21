@@ -139,7 +139,6 @@ All of these are parameters of `main.yaml`, with defaults:
   provider for `token.actions.githubusercontent.com`; IAM permits one per
   issuer URL. In a fresh account set it to `'true'` and clear
   `ExistingOidcProviderArn`.
-- `S3PrefixListId` is Region specific — `pl-6da54004` for eu-west-1.
 - `AppRepositoryId` must be the application repository's `owner/repo`.
 
 ## How configuration reaches the container
@@ -207,10 +206,10 @@ dependency implicitly.
 Logs, SSM, Secrets Manager and ECS Exec are reached over interface endpoints,
 S3 (ECR layers) over a gateway endpoint.
 
-**Egress is never implicit.** A CloudFormation security group without
-`SecurityGroupEgress` gets an allow-all rule. Every group here declares its
-egress; `rds-sg`, `cache-sg` and `vpce-sg` never initiate connections and are
-pinned to `127.0.0.1/32`.
+**Isolation is enforced on ingress.** Security groups are stateful and the
+private subnets have no default route, so per-tier egress rules add nothing an
+allow-all rule does not already bound. Every group leaves egress at the default
+and names exactly which source group and port may reach it.
 
 **Five subnet tiers.** ALB, ECS tasks, RDS Proxy, RDS and ElastiCache each get
 their own subnets and security group, so a compromise in one tier cannot reach
