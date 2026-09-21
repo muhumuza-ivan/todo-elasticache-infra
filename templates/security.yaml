@@ -36,19 +36,24 @@ Parameters:
       curl the green task set from outside.
 
 Resources:
-  # GroupDescription is IMMUTABLE. EC2 has no API to change a security group's
-  # description, so CloudFormation replaces the group - and because GroupName is
-  # fixed here, the replacement collides with the live group ("already exists").
-  # Replacement is impossible anyway: these group IDs are exported and imported
-  # by AppStack, DataStack and CacheStack, and an in-use export cannot change.
-  # The descriptions below are therefore frozen at their original wording and no
-  # longer describe egress accurately - see the template description above.
+  # GroupDescription is IMMUTABLE: EC2 cannot change a security group's
+  # description, so CloudFormation replaces the group. GroupName is fixed here
+  # and these group IDs are exported to AppStack, DataStack and CacheStack, so
+  # a replacement both collides with the live group and cannot update an in-use
+  # export. Editing any description below therefore means rebuilding the whole
+  # environment, not a rolling update. Change the wording only with that cost
+  # accepted.
+  #
+  # Egress is deliberately unset: a security group created without
+  # SecurityGroupEgress keeps EC2's default allow-all rule, so the tiers can
+  # still open the connections they need. Adding a standalone
+  # AWS::EC2::SecurityGroupEgress resource would strip that default.
   # ----------------------------------------------------------------- ALB tier
   AlbSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupName: !Sub '${ProjectName}-${Environment}-alb-sg'
-      GroupDescription: Public ALB - accepts internet HTTP, talks only to ECS tasks.
+      GroupDescription: Public ALB - accepts internet HTTP and the blue/green test listener.
       VpcId:
         Fn::ImportValue: !Sub '${ProjectName}-${Environment}-VpcId'
       SecurityGroupIngress:
@@ -77,7 +82,7 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupName: !Sub '${ProjectName}-${Environment}-ecs-sg'
-      GroupDescription: Fargate tasks - ingress from ALB only, egress to data tiers and VPC endpoints.
+      GroupDescription: Fargate tasks - ingress from the ALB only.
       VpcId:
         Fn::ImportValue: !Sub '${ProjectName}-${Environment}-VpcId'
       Tags:
@@ -95,7 +100,7 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupName: !Sub '${ProjectName}-${Environment}-rdsproxy-sg'
-      GroupDescription: RDS Proxy - ingress from ECS tasks, egress to the database only.
+      GroupDescription: RDS Proxy - ingress from ECS tasks only.
       VpcId:
         Fn::ImportValue: !Sub '${ProjectName}-${Environment}-VpcId'
       Tags:
@@ -113,7 +118,7 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupName: !Sub '${ProjectName}-${Environment}-rds-sg'
-      GroupDescription: PostgreSQL - ingress from RDS Proxy only, no egress.
+      GroupDescription: PostgreSQL - ingress from RDS Proxy only.
       VpcId:
         Fn::ImportValue: !Sub '${ProjectName}-${Environment}-VpcId'
       Tags:
@@ -131,7 +136,7 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupName: !Sub '${ProjectName}-${Environment}-cache-sg'
-      GroupDescription: ElastiCache for Redis - ingress from ECS tasks only, no egress.
+      GroupDescription: ElastiCache for Redis - ingress from ECS tasks only.
       VpcId:
         Fn::ImportValue: !Sub '${ProjectName}-${Environment}-VpcId'
       Tags:
@@ -149,7 +154,7 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupName: !Sub '${ProjectName}-${Environment}-vpce-sg'
-      GroupDescription: Interface VPC endpoints - HTTPS from ECS tasks only, no egress.
+      GroupDescription: Interface VPC endpoints - HTTPS from ECS tasks only.
       VpcId:
         Fn::ImportValue: !Sub '${ProjectName}-${Environment}-VpcId'
       Tags:
