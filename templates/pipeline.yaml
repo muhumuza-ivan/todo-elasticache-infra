@@ -260,6 +260,13 @@ Resources:
                   - ecs:DescribeServices
                   - ecs:DescribeTaskDefinition
                 Resource: '*'
+              # taskdef.json carries a `tags` block, and RegisterTaskDefinition
+              # with tags is authorised as a separate ecs:TagResource action on
+              # the family. Without it the deploy stage fails with
+              # "not authorized to perform: ecs:TagResource".
+              - Effect: Allow
+                Action: ecs:TagResource
+                Resource: !Sub 'arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${ProjectName}-${Environment}:*'
               # CodeDeployToECS registers the revision from taskdef.json, so the
               # pipeline must be allowed to pass the two task roles it names.
               - Effect: Allow
