@@ -20,9 +20,6 @@ Parameters:
   ContainerPort:
     Type: Number
     Default: 8080
-  TestListenerPort:
-    Type: Number
-    Default: 8080
   TaskCpu:
     Type: String
     Default: '512'
@@ -251,18 +248,6 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref BlueTargetGroup
 
-  # CodeDeploy points the green task set here first so it can be validated
-  # before production traffic is shifted.
-  TestListener:
-    Type: AWS::ElasticLoadBalancingV2::Listener
-    Properties:
-      LoadBalancerArn: !Ref LoadBalancer
-      Port: !Ref TestListenerPort
-      Protocol: HTTP
-      DefaultActions:
-        - Type: forward
-          TargetGroupArn: !Ref GreenTargetGroup
-
   # -------------------------------------------------------------------- ECS
   Cluster:
     Type: AWS::ECS::Cluster
@@ -350,7 +335,6 @@ Resources:
     Type: AWS::ECS::Service
     DependsOn:
       - ProductionListener
-      - TestListener
     Properties:
       ServiceName: !Sub '${ProjectName}-${Environment}'
       Cluster: !Ref Cluster
@@ -483,10 +467,6 @@ Outputs:
     Value: !Ref ProductionListener
     Export:
       Name: !Sub '${ProjectName}-${Environment}-ProductionListenerArn'
-  TestListenerArn:
-    Value: !Ref TestListener
-    Export:
-      Name: !Sub '${ProjectName}-${Environment}-TestListenerArn'
   Alb5xxAlarmName:
     Value: !Ref Alb5xxAlarm
     Export:

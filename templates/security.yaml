@@ -19,21 +19,10 @@ Parameters:
     Type: Number
     Default: 8080
     Description: Port the application container listens on.
-  TestListenerPort:
-    Type: Number
-    Default: 8080
-    Description: ALB listener port CodeDeploy uses to expose the green task set.
   AllowedHttpCidr:
     Type: String
     Default: 0.0.0.0/0
     Description: CIDR allowed to reach the public ALB on port 80.
-  TestListenerCidr:
-    Type: String
-    Default: 10.20.0.0/16
-    Description: >-
-      CIDR allowed to reach the blue/green test listener. Defaults to the VPC CIDR
-      so pre-cutover validation is internal only; widen deliberately if you need to
-      curl the green task set from outside.
 
 Resources:
   # GroupDescription is IMMUTABLE: EC2 cannot change a security group's
@@ -53,6 +42,8 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupName: !Sub '${ProjectName}-${Environment}-alb-sg'
+      # The test listener is gone, but this wording cannot be corrected: see the
+      # immutability note above. Editing it would replace the group.
       GroupDescription: Public ALB - accepts internet HTTP and the blue/green test listener.
       VpcId:
         Fn::ImportValue: !Sub '${ProjectName}-${Environment}-VpcId'
@@ -62,11 +53,6 @@ Resources:
           FromPort: 80
           ToPort: 80
           CidrIp: !Ref AllowedHttpCidr
-        - Description: Blue/green test listener
-          IpProtocol: tcp
-          FromPort: !Ref TestListenerPort
-          ToPort: !Ref TestListenerPort
-          CidrIp: !Ref TestListenerCidr
       Tags:
         - Key: Name
           Value: !Sub '${ProjectName}-${Environment}-alb-sg'
