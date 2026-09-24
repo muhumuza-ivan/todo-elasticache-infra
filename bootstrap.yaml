@@ -76,6 +76,12 @@ Parameters:
       Existing GitHub OIDC provider. An account holds at most one per issuer
       URL, and this one already exists, so no stack in this project creates it.
 
+  TemplateExpireAfterDays:
+    Type: Number
+    Default: 30
+    MinValue: 1
+    MaxValue: 365
+    Description: Packaged templates are content-addressed, so superseded copies just accumulate.
   ManagedResourcePrefix:
     Type: String
     Default: todo-app-
@@ -331,6 +337,70 @@ Resources:
         - Key: ManagedBy
           Value: cloudformation
 
+  # Packaging target for main.yaml's child templates. It lives here rather than
+  # in a stack of its own because it is created once and reused by every deploy,
+  # exactly like the two roles above. It cannot live in main.yaml, because
+  # 'aws cloudformation package' uploads main.yaml's own children into it.
+  TemplateBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub '${ProjectName}-${Environment}-cfn-templates-${AWS::AccountId}-${AWS::Region}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-superseded-templates
+            Status: Enabled
+            ExpirationInDays: !Ref TemplateExpireAfterDays
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-cfn-templates'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: cicd
+        - Key: ManagedBy
+          Value: cloudformation
+
+  TemplateBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    # Retained alongside the bucket: a retained bucket without this policy would
+    # be a bucket that no longer refuses plaintext transport.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Bucket: !Ref TemplateBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt TemplateBucket.Arn
+              - !Sub '${TemplateBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
 Outputs:
   DeployRoleArn:
     Description: Value for the AWS_DEPLOY_ROLE_ARN repository secret.
@@ -342,3 +412,8 @@ Outputs:
     Value: !GetAtt StackRole.Arn
     Export:
       Name: !Sub '${ProjectName}-${Environment}-StackRoleArn'
+  TemplateBucketName:
+    Description: Target for 'aws cloudformation package --s3-bucket' in deploy.yml.
+    Value: !Ref TemplateBucket
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-TemplateBucketName'
