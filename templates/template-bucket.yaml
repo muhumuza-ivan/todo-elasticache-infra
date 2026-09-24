@@ -29,7 +29,10 @@ Parameters:
 Resources:
   TemplateBucket:
     Type: AWS::S3::Bucket
-    DeletionPolicy: Delete
+    # Retain so ownership can be handed to the bootstrap stack by deleting this
+    # stack and importing the bucket, rather than destroying and recreating a
+    # globally unique name.
+    DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
       BucketName: !Sub '${ProjectName}-${Environment}-cfn-templates-${AWS::AccountId}-${AWS::Region}'
@@ -67,6 +70,10 @@ Resources:
 
   TemplateBucketPolicy:
     Type: AWS::S3::BucketPolicy
+    # Retained too, so the bucket keeps DenyInsecureTransport during the handover
+    # instead of sitting unprotected between the delete and the re-create.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       Bucket: !Ref TemplateBucket
       PolicyDocument:
