@@ -46,22 +46,25 @@ jobs:
           # MaxSessionDuration on the role in bootstrap.yaml.
           role-duration-seconds: 7200
 
-      # Holds the packaged child templates only, and cannot be nested inside
+      # The bucket is a bootstrap prerequisite: created once alongside the two
+      # deploy roles, not redeployed on every run. It cannot be nested inside
       # main.yaml because packaging uploads main.yaml's children into it.
       # CodePipeline's artifact bucket (appspec.yaml, taskdef.json) is separate
       # and lives in pipeline.yaml.
-      - name: Deploy the CloudFormation template bucket
+      - name: Resolve the template bucket
         id: bucket
         run: |
           set -euo pipefail
-          aws cloudformation deploy \
-            --stack-name "${STACK_NAME}-templates" \
-            --template-file templates/template-bucket.yaml \
-            --no-fail-on-empty-changeset
           name=$(aws cloudformation describe-stacks \
-            --stack-name "${STACK_NAME}-templates" \
-            --query "Stacks[0].Outputs[?OutputKey=='BucketName'].OutputValue" --output text)
+            --stack-name "${STACK_NAME}-bootstrap" \
+            --query "Stacks[0].Outputs[?OutputKey=='TemplateBucketName'].OutputValue" \
+            --output text)
+          if [ -z "$name" ] || [ "$name" = "None" ]; then
+            echo "::error::TemplateBucketName not found on ${STACK_NAME}-bootstrap. Deploy the bootstrap stack first."
+            exit 1
+          fi
           echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "packaging into $name"
 
       - name: Package and deploy
         env:
