@@ -1,7 +1,8 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
-  Credentials only: the two IAM roles the deploy workflow needs before it can
-  authenticate. Nothing else belongs here.
+  The deploy workflow's prerequisites: the two IAM roles it authenticates with,
+  and the S3 bucket it packages main.yaml's child templates into. All three are
+  created once and reused by every deploy.
 
   Created ONCE from the console, because the workflow that maintains it
   authenticates with a role this very stack creates - a workflow cannot issue
@@ -10,12 +11,10 @@ Description: >-
 
   Everything else the project needs is created by main.yaml: ECR, the app OIDC
   role, the CodeConnections connection, network, security, data, cache, app and
-  pipeline. The one exception is the S3 bucket that `aws cloudformation
-  package` uploads main.yaml's child templates into - it has to exist before
-  packaging runs, so the deploy workflow creates it from
-  templates/template-bucket.yaml as its first step. That bucket holds only
-  packaged templates; CodePipeline keeps appspec.yaml and taskdef.json in a
-  separate artifact bucket declared in pipeline.yaml.
+  pipeline. The template bucket cannot live there, because `aws cloudformation
+  package` uploads main.yaml's own children into it, so it has to exist before
+  main.yaml is packaged. It holds only packaged templates; CodePipeline keeps
+  appspec.yaml and taskdef.json in a separate artifact bucket in pipeline.yaml.
 
 Parameters:
   ProjectName:
